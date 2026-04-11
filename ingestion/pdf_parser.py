@@ -42,11 +42,14 @@ def clean_page_text(text: str, page_num: int, total_pages: int) -> str:
         if not stripped:
             continue
 
+        # Only skip lines that are purely a page number
         if re.match(r'^\d{1,3}$', stripped):
             continue
 
-        words_in_line = stripped.split()
-        if len(words_in_line) <= 3 and not stripped.endswith(('.', ':', ',')):
+        # Skip lines that are a single word with no punctuation
+        # (catches stray headers like "Abstract" floating alone, 
+        #  or "GoogleBrain" artifacts — but NOT sentence fragments)
+        if len(stripped.split()) == 1 and not stripped.endswith(('.', ':', ',')):
             continue
 
         cleaned_lines.append(stripped)
@@ -55,18 +58,21 @@ def clean_page_text(text: str, page_num: int, total_pages: int) -> str:
 
 
 def remove_references_section(full_text: str) -> str:
+    # Use re.IGNORECASE and don't rely on exact newlines around the word
     ref_patterns = [
-        r'\nReferences\n',
-        r'\nBibliography\n',
-        r'\nREFERENCES\n',
-        r'\nWorks Cited\n'
+        r'\nReferences\b',
+        r'\nBibliography\b',
+        r'\nREFERENCES\b',
+        r'\nWorks Cited\b'
     ]
 
     cut_position = len(full_text)
 
     for pattern in ref_patterns:
-        match = re.search(pattern, full_text)
+        match = re.search(pattern, full_text, re.IGNORECASE)
         if match:
             cut_position = min(cut_position, match.start())
 
     return full_text[:cut_position]
+
+    raw_text = page.extract_text(x_tolerance=3, y_tolerance=3)
