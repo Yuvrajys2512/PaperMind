@@ -1,22 +1,22 @@
-from ingestion.pdf_parser import extract_text_from_pdf, remove_references_section
-import re
+from ingestion.pdf_parser import (
+    extract_text_from_pdf,
+    remove_credits_block,
+    remove_references_section
+)
+
 PDF_PATH = r"data\Attention is all you need.pdf"
 
 result = extract_text_from_pdf(PDF_PATH)
 
-print(f"Total pages found: {result['total_pages']}")
-print(f"Pages with extractable text: {len(result['pages'])}")
-print(f"Total characters extracted: {len(result['full_text'])}")
+print(f"Pages extracted: {result['total_pages']}")
+print(f"Total characters: {len(result['full_text'])}")
 
-print("\n--- FIRST 800 CHARACTERS ---")
-print(result['full_text'][:800])
+# Apply filters
+clean = remove_credits_block(result['full_text'])
+clean = remove_references_section(clean)
 
-print("\n--- AFTER REMOVING REFERENCES (last 500 chars) ---")
-clean_text = remove_references_section(result['full_text'])
-print(clean_text[-500:])
+print("\n--- FIRST 1000 CHARACTERS ---")
+print(clean[:1000])
 
-# Temporary diagnostic — we'll remove this after
-for page in result['pages']:
-    if page['page_num'] == 1:
-        print("=== RAW PAGE 1 TEXT ===")
-        print(repr(page['text']))
+print("\n--- LAST 300 CHARACTERS ---")
+print(clean[-300:])

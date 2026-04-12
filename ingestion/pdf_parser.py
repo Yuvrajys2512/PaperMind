@@ -2,29 +2,53 @@ import pdfplumber
 import re
 
 
+def chars_to_text(chars: list) -> str:
+    if not chars:
+        return ""
+    chars = sorted(chars, key=lambda c: c["x0"])
+    result = chars[0]["text"]
+    for i in range(1, len(chars)):
+        gap = chars[i]["x0"] - chars[i - 1]["x1"]
+        if gap > 2:
+            result += " "
+        result += chars[i]["text"]
+    return result
+
+
 def extract_text_from_pdf(pdf_path: str) -> dict:
     pages = []
-
 
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
 
         for page_num, page in enumerate(pdf.pages, start=1):
-            raw_text = page.extract_text()
-            filtered_page = page.filter(lambda obj: obj.get("upright"))
-            raw_text = filtered_page.extract_text(x_tolerance=3, y_tolerance=3)
 
-            if raw_text is None:
-                print(f"Warning: page {page_num} returned no text (possibly scanned image)")
+            # Keep only upright characters — filters rotated watermarks
+            upright_chars = [c for c in page.chars if c.get("upright")]
+
+            if not upright_chars:
+                print(f"Warning: page {page_num} had no upright text")
                 continue
 
-            cleaned = clean_page_text(raw_text, page_num, total_pages)
+            # Group characters into lines by their y-coordinate
+            line_map = {}
+            for c in upright_chars:
+                y = round(c["y0"])
+                if y not in line_map:
+                    line_map[y] = []
+                line_map[y].append(c)
 
-            if cleaned.strip():
-                pages.append({
-                    "page_num": page_num,
-                    "text": cleaned
-                })
+            # Sort lines top to bottom, reconstruct text with proper spacing
+            sorted_ys = sorted(line_map.keys(), reverse=True)
+            page_lines = []
+
+            for y in sorted_ys:
+                line_text = chars_to_text(line_map[y])
+                if line_text.strip():
+                    page_lines.append(line_text.strip())
+
+            page_text = "\n".join(page_lines)
+            pages.append({"page_num": page_num, "text": page_text})
 
     full_text = "\n\n".join([p["text"] for p in pages])
 
@@ -35,47 +59,19 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
     }
 
 
-def clean_page_text(text: str, page_num: int, total_pages: int) -> str:
-    lines = text.split('\n')
-    cleaned_lines = []
-
-    for line in lines:
-        stripped = line.strip()
-
-        if not stripped:
-            continue
-
-        # Only skip lines that are purely a page number
-        if re.match(r'^\d{1,3}$', stripped):
-            continue
-
-        # Skip lines that are a single word with no punctuation
-        # (catches stray headers like "Abstract" floating alone, 
-        #  or "GoogleBrain" artifacts — but NOT sentence fragments)
-        if len(stripped.split()) == 1 and not stripped.endswith(('.', ':', ',')):
-            continue
-
-        cleaned_lines.append(stripped)
-
-    return '\n'.join(cleaned_lines)
+def remove_credits_block(full_text: str) -> str:
+    """
+    Everything before 'Abstract' is author credits — noise for retrieval.
+    Find the word Abstract as a standalone line and cut there.
+    """
+    match = re.search(r'\nAbstract\n', full_text, re.IGNORECASE)
+    if match:
+        return full_text[match.start():].strip()
+    return full_text
 
 
 def remove_references_section(full_text: str) -> str:
-    # Use re.IGNORECASE and don't rely on exact newlines around the word
-    ref_patterns = [
-        r'\nReferences\b',
-        r'\nBibliography\b',
-        r'\nREFERENCES\b',
-        r'\nWorks Cited\b'
-    ]
-
-    cut_position = len(full_text)
-
-    for pattern in ref_patterns:
-        match = re.search(pattern, full_text, re.IGNORECASE)
-        if match:
-            cut_position = min(cut_position, match.start())
-
-    return full_text[:cut_position]
-
-    raw_text = page.extract_text(x_tolerance=3, y_tolerance=3)
+    match = re.search(r'\nReferences\b', full_text, re.IGNORECASE)
+    if match:
+        return full_text[:match.start()].strip()
+    return full_text
