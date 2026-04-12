@@ -15,3 +15,8 @@ print("\n--- AFTER REMOVING REFERENCES (last 500 chars) ---")
 clean_text = remove_references_section(result['full_text'])
 print(clean_text[-500:])
 
+# Temporary diagnostic — we'll remove this after
+for page in result['pages']:
+    if page['page_num'] == 1:
+        print("=== RAW PAGE 1 TEXT ===")
+        print(repr(page['text']))

@@ -4,6 +4,8 @@ import re
 
 def extract_text_from_pdf(pdf_path: str) -> dict:
     pages = []
+    filtered_page = page.filter(lambda obj: obj.get("upright"))
+    raw_text = filtered_page.extract_text(x_tolerance=3, y_tolerance=3)
 
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
