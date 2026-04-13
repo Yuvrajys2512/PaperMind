@@ -48,7 +48,7 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
                     page_lines.append(line_text.strip())
 
             page_text = "\n".join(page_lines)
-            pages.append({"page_num": page_num, "text": page_text})
+            pages.append({"page_num": page_num, "text": page_text, "chars": upright_chars})
 
     full_text = "\n\n".join([p["text"] for p in pages])
 
