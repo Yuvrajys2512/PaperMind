@@ -1,5 +1,5 @@
 from ingestion.pdf_parser import extract_text_from_pdf
-from ingestion.section_decetor import build_candidates
+from ingestion.section_detector import build_candidates
 
 PDF_PATH = r"data\Attention is all you need.pdf"
 

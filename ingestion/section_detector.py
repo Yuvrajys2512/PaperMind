@@ -132,7 +132,7 @@ def build_candidates(pages: list) -> list:
                 line_text, line_chars, body_size, prev_line_y
             )
 
-            if score >= 5:
+            if score >= 8:
                 context_lines = [
                     lines[j][0]
                     for j in range(i + 1, min(i + 4, len(lines)))
