@@ -45,8 +45,13 @@
 
 
 import re
+import os
 from collections import Counter
+from dotenv import load_dotenv
+from groq import Groq
 
+load_dotenv()
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 def chars_to_text(chars: list) -> str:
     if not chars:
@@ -142,6 +147,7 @@ def build_candidates(pages: list) -> list:
                     "candidate_line": line_text,
                     "context": " ".join(context_lines),
                     "page_num": page_num,
+                    "line_index": i,
                     "score": score
                 })
                 candidate_id += 1
@@ -149,4 +155,137 @@ def build_candidates(pages: list) -> list:
             if line_chars:
                 prev_line_y = min(c["y0"] for c in line_chars)
 
-    return candidates
+    return candidates\
+
+#CONFIRM HEADING WITH LLM CODE BLOCK
+
+def confirm_headings_with_llm(candidates: list) -> dict:
+    if not candidates:
+        return {}
+
+    # Build the prompt
+    prompt_lines = []
+    for c in candidates:
+        line = f"{c['id']} | Candidate: \"{c['candidate_line']}\" | Context: \"{c['context']}\""
+        prompt_lines.append(line)
+
+    candidates_text = "\n".join(prompt_lines)
+
+    prompt = f"""You are analyzing candidate section headings from an academic research paper.
+
+For each numbered candidate below, I provide the candidate line and the
+lines immediately following it as context.
+
+Respond with ONLY this format, one line per candidate:
+ID | SECTION or SUBSECTION or NONE
+
+Rules:
+- SECTION = a major section heading (Introduction, Methodology, Results etc.)
+- SUBSECTION = a numbered or titled subsection (3.1 Encoder, 5.2 Hardware etc.)
+- NONE = not a heading (figure label, table content, math expression etc.)
+
+Candidates:
+{candidates_text}"""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    raw = response.choices[0].message.content
+
+    results = {}
+    for line in raw.strip().split("\n"):
+        parts = line.strip().split("|")
+        if len(parts) >= 2:
+            try:
+                candidate_id = int(parts[0].strip())
+                verdict = parts[1].strip().upper()
+                if verdict in ("SECTION", "SUBSECTION", "NONE"):
+                    results[candidate_id] = verdict
+            except ValueError:
+                continue
+
+    return results
+
+
+
+
+#ASSEMBLER SECTION
+def assemble_sections(pages: list, confirmed: dict, candidates: list) -> list:
+    """
+    Walk every line of every page in order. When a line matches a confirmed
+    heading (SECTION or SUBSECTION), open a new bucket. Pour subsequent lines
+    into the active bucket until the next heading or "References".
+
+    Returns a list of dicts:
+        {
+            "heading":  str,            # the heading line text
+            "type":     "SECTION" | "SUBSECTION",
+            "page_num": int,
+            "body":     str,            # all content lines joined by newline
+        }
+    """
+    # Build a fast lookup: (page_num, line_index) → (verdict, heading_text)
+    # Only keep confirmed headings — NONE entries are ignored.
+    heading_lookup: dict[tuple, tuple] = {}
+    for c in candidates:
+        verdict = confirmed.get(c["id"])
+        if verdict in ("SECTION", "SUBSECTION"):
+            key = (c["page_num"], c["line_index"])
+            heading_lookup[key] = (verdict, c["candidate_line"])
+
+    sections = []
+    current_heading: str | None = None
+    current_type: str | None = None
+    current_page: int | None = None
+    current_body: list[str] = []
+
+    def flush():
+        """Save the active bucket to sections if there's an open heading."""
+        if current_heading is not None:
+            sections.append({
+                "heading": current_heading,
+                "type": current_type,
+                "page_num": current_page,
+                "body": "\n".join(current_body).strip(),
+            })
+
+    for page in pages:
+        chars = page["chars"]
+        page_num = page["page_num"]
+
+        # Rebuild the same line list build_candidates produced so line_index matches.
+        line_map: dict[int, list] = {}
+        for c in chars:
+            y = round(c["y0"])
+            line_map.setdefault(y, []).append(c)
+
+        sorted_ys = sorted(line_map.keys(), reverse=True)
+        lines = []
+        for y in sorted_ys:
+            line_chars = sorted(line_map[y], key=lambda c: c["x0"])
+            line_text = chars_to_text(line_chars)
+            if line_text.strip():
+                lines.append(line_text)
+
+        for line_index, line_text in enumerate(lines):
+            stripped = line_text.strip()
+
+            # Stop at References — we don't want bibliography content.
+            if stripped.lower().startswith("references"):
+                flush()
+                return sections
+
+            key = (page_num, line_index)
+            if key in heading_lookup:
+                flush()
+                current_heading = stripped
+                current_type, _ = heading_lookup[key]
+                current_page = page_num
+                current_body = []
+            elif current_heading is not None:
+                current_body.append(stripped)
+
+    flush()
+    return sections
