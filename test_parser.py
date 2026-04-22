@@ -29,3 +29,13 @@ for chunk_size, overlap in combinations:
     if intro_chunks:
         print(f"  Tokens: {intro_chunks[0]['token_count']}")
         print(f"  Text preview: {intro_chunks[0]['text'][:200]}")
+
+# Manual quality check on 512/100
+chunks = chunk_sections(sections, 512, 100)
+intro_chunks = [c for c in chunks if "Introduction" in c["section"]]
+print(f"\n=== 512/100 Introduction chunks ===")
+for c in intro_chunks:
+    print(f"\nChunk {c['chunk_index']+1} of {c['total_chunks_in_section']}")
+    print(f"Tokens: {c['token_count']}")
+    print(c['text'])
+    print("---")
