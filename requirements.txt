@@ -1,2 +1,5 @@
 pdfplumber
 tiktoken
+pymupdf
+chromadb
+sentence-transformers

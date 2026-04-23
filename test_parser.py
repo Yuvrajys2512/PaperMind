@@ -5,37 +5,45 @@ from ingestion.section_detector import (
     assemble_sections
 )
 from ingestion.chunker import chunk_sections
+from ingestion.embedder import embed_and_store
+from ingestion.retriever import retrieve
 
 PDF_PATH = r"data\Attention is all you need.pdf"
+PAPER_NAME = "Attention Is All You Need"
 
+# Step 1 — Extract
+print("Extracting text...")
 result = extract_text_from_pdf(PDF_PATH)
+
+# Step 2 — Detect sections
+print("Detecting sections...")
 candidates = build_candidates(result["pages"])
 confirmed = confirm_headings_with_llm(candidates)
 sections = assemble_sections(result["pages"], confirmed, candidates)
+print(f"Found {len(sections)} sections")
 
-# Test all six combinations
-combinations = [
-    (256, 50), (256, 100),
-    (512, 50), (512, 100),
-    (1024, 50), (1024, 100)
+# Step 3 — Chunk
+print("Chunking...")
+chunks = chunk_sections(sections, chunk_size=512, overlap=100)
+print(f"Created {len(chunks)} chunks")
+
+# Step 4 — Embed and store
+embed_and_store(chunks, PAPER_NAME)
+
+# Step 5 — Retrieve
+print("\n--- RETRIEVAL TEST ---")
+questions = [
+    "What is the attention mechanism?",
+    "How many layers does the encoder have?",
+    "What optimizer was used for training?",
+    "What BLEU score did the model achieve?"
 ]
 
-for chunk_size, overlap in combinations:
-    chunks = chunk_sections(sections, chunk_size, overlap)
-    print(f"\nChunk size: {chunk_size} | Overlap: {overlap}")
-    print(f"Total chunks produced: {len(chunks)}")
-    print(f"Sample chunk from Introduction:")
-    intro_chunks = [c for c in chunks if "Introduction" in c["section"]]
-    if intro_chunks:
-        print(f"  Tokens: {intro_chunks[0]['token_count']}")
-        print(f"  Text preview: {intro_chunks[0]['text'][:200]}")
-
-# Manual quality check on 512/100
-chunks = chunk_sections(sections, 512, 100)
-intro_chunks = [c for c in chunks if "Introduction" in c["section"]]
-print(f"\n=== 512/100 Introduction chunks ===")
-for c in intro_chunks:
-    print(f"\nChunk {c['chunk_index']+1} of {c['total_chunks_in_section']}")
-    print(f"Tokens: {c['token_count']}")
-    print(c['text'])
-    print("---")
+for question in questions:
+    print(f"\nQ: {question}")
+    results = retrieve(question, PAPER_NAME, top_k=3)
+    for i, r in enumerate(results):
+        print(f"  Result {i+1} [{r['metadata']['section']}] "
+              f"(page {r['metadata']['page_num']}, "
+              f"distance: {r['distance']:.3f})")
+        print(f"  {r['text'][:150]}...")
