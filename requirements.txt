@@ -3,3 +3,4 @@ tiktoken
 pymupdf
 chromadb
 sentence-transformers
+rank-bm25
