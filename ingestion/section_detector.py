@@ -50,6 +50,8 @@ from collections import Counter
 from dotenv import load_dotenv
 from groq import Groq
 
+from ingestion.pdf_parser import build_page_lines
+
 load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
@@ -112,23 +114,10 @@ def build_candidates(pages: list) -> list:
     for page in pages:
         chars = page["chars"]
         page_num = page["page_num"]
+        page_width = page.get("page_width", 600)  # fallback just in case
         body_size = get_body_font_size(chars)
 
-        line_map = {}
-        for c in chars:
-            y = round(c["y0"])
-            if y not in line_map:
-                line_map[y] = []
-            line_map[y].append(c)
-
-        sorted_ys = sorted(line_map.keys(), reverse=True)
-
-        lines = []
-        for y in sorted_ys:
-            line_chars = sorted(line_map[y], key=lambda c: c["x0"])
-            line_text = chars_to_text(line_chars)
-            if line_text.strip():
-                lines.append((line_text, line_chars))
+        lines = build_page_lines(chars, page_width)
 
         prev_line_y = None
 
@@ -254,20 +243,11 @@ def assemble_sections(pages: list, confirmed: dict, candidates: list) -> list:
     for page in pages:
         chars = page["chars"]
         page_num = page["page_num"]
+        page_width = page.get("page_width", 600)
 
         # Rebuild the same line list build_candidates produced so line_index matches.
-        line_map: dict[int, list] = {}
-        for c in chars:
-            y = round(c["y0"])
-            line_map.setdefault(y, []).append(c)
-
-        sorted_ys = sorted(line_map.keys(), reverse=True)
-        lines = []
-        for y in sorted_ys:
-            line_chars = sorted(line_map[y], key=lambda c: c["x0"])
-            line_text = chars_to_text(line_chars)
-            if line_text.strip():
-                lines.append(line_text)
+        page_lines = build_page_lines(chars, page_width)
+        lines = [text for text, _ in page_lines]
 
         for line_index, line_text in enumerate(lines):
             stripped = line_text.strip()
