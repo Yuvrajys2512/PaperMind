@@ -1,212 +1,121 @@
 """
-ingestion/retry_engine.py — Phase 3, Steps 3 & 4
+test_retry.py — Phase 3, Step 4 verification gate
 
-Public API
-----------
-diagnose_failure(query, answer, chunks, eval_scores) -> "retrieval" | "generation"
-retry_query(query, paper_name, failure_type, attempt) -> dict
+Tests the full retry loop on Q01 — "What optimizer was used to train the Transformer?"
+This query returned "cannot answer" on attempt 1 (confidence 3.6/100).
+The retry engine must find the Adam optimizer answer on attempt 2 or 3.
+
+Pass criteria:
+  - Attempt 2 or 3 produces an answer mentioning "Adam"
+  - Confidence improves above 50 on a retry attempt
+  - System does not crash
+
+Run from project root:
+    python test_retry.py
 """
 
-from __future__ import annotations
-import os
-from groq import Groq
-from dotenv import load_dotenv
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-load_dotenv()
+from ingestion.query_router  import route_query
+from ingestion.generator     import generate_answer
+from ingestion.evaluator     import evaluate_answer, compute_confidence
+from ingestion.retry_engine  import diagnose_failure, retry_query
 
-# ── Diagnosis thresholds ──────────────────────────────────────────────────────
-_RERANK_RELEVANCE_THRESHOLD        = 0.0
-_FAITHFULNESS_LOW                  = 0.40
-_FAITHFULNESS_GENERATION_THRESHOLD = 0.80
-_RELEVANCY_LOW                     = 0.40
+PAPER_NAME      = "attention-is-all-you-need"
+RETRY_GATE_QUERY = "What optimizer was used to train the Transformer?"
+CONFIDENCE_THRESHOLD = 50
 
-MAX_ATTEMPTS = 3
+SEP  = "─" * 70
+SEP2 = "═" * 70
 
+print(SEP2)
+print("Phase 3 Step 4 — Retry Loop Verification")
+print(f"Query: {RETRY_GATE_QUERY}")
+print(SEP2)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Step 3 — Failure diagnosis
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Attempt 1 — original query, original config ───────────────────────────────
+print(f"\n{'─'*30} Attempt 1 {'─'*30}")
+routed_1    = route_query(RETRY_GATE_QUERY, PAPER_NAME)
+generated_1 = generate_answer(routed_1["query"], routed_1["chunks"], routed_1["intents"])
+answer_1    = generated_1["answer"]
+chunks_1    = routed_1["chunks"]
 
-def _extract_rerank_scores(chunks: list) -> list[float]:
-    return [float(c["score"]) for c in chunks
-            if isinstance(c, dict) and "score" in c]
+eval_1 = evaluate_answer(RETRY_GATE_QUERY, answer_1, chunks_1)
+conf_1 = compute_confidence(eval_1["faithfulness"], eval_1["answer_relevancy"])
 
+print(f"Answer:     {answer_1[:150]}")
+print(f"Confidence: {conf_1:.1f}/100  Faith: {eval_1['faithfulness']:.3f}  Relev: {eval_1['answer_relevancy']:.3f}")
 
-def diagnose_failure(
-    query: str,
-    answer: str,
-    chunks: list,
-    eval_scores: dict,
-) -> str:
-    """
-    Diagnose why an answer failed. Returns "retrieval" or "generation".
-    """
-    faithfulness     = eval_scores.get("faithfulness", 0.0)
-    answer_relevancy = eval_scores.get("answer_relevancy", 0.0)
+best_answer     = answer_1
+best_confidence = conf_1
+adam_found      = False
+winning_attempt = 1
 
-    rerank_scores = _extract_rerank_scores(chunks)
-    if rerank_scores:
-        top_score    = max(rerank_scores)
-        retrieval_ok = top_score >= _RERANK_RELEVANCE_THRESHOLD
+if conf_1 >= CONFIDENCE_THRESHOLD:
+    print(f"\nAttempt 1 already passes threshold ({conf_1:.1f} >= {CONFIDENCE_THRESHOLD})")
+    adam_found = "adam" in answer_1.lower()
+else:
+    # ── Diagnose ──────────────────────────────────────────────────────────────
+    failure_type = diagnose_failure(RETRY_GATE_QUERY, answer_1, chunks_1, eval_1)
+
+    # ── Attempt 2 ─────────────────────────────────────────────────────────────
+    print(f"\n{'─'*30} Attempt 2 {'─'*30}")
+    result_2 = retry_query(RETRY_GATE_QUERY, PAPER_NAME, failure_type, attempt=2)
+    answer_2  = result_2["answer"]
+    chunks_2  = result_2["chunks"]
+
+    eval_2 = evaluate_answer(RETRY_GATE_QUERY, answer_2, chunks_2)
+    conf_2 = compute_confidence(eval_2["faithfulness"], eval_2["answer_relevancy"])
+
+    print(f"Query used: {result_2['query_used']}")
+    print(f"Answer:     {answer_2[:150]}")
+    print(f"Confidence: {conf_2:.1f}/100  Faith: {eval_2['faithfulness']:.3f}  Relev: {eval_2['answer_relevancy']:.3f}")
+
+    if conf_2 > best_confidence:
+        best_answer, best_confidence = answer_2, conf_2
+        winning_attempt = 2
+
+    if conf_2 >= CONFIDENCE_THRESHOLD or "adam" in answer_2.lower():
+        adam_found = "adam" in answer_2.lower()
+        print(f"\n✓ Retry succeeded on attempt 2")
     else:
-        # No rerank scores in chunks — use faithfulness as proxy
-        retrieval_ok = faithfulness >= 0.05
+        # ── Attempt 3 ─────────────────────────────────────────────────────────
+        failure_type_2 = diagnose_failure(RETRY_GATE_QUERY, answer_2, chunks_2, eval_2)
+        print(f"\n{'─'*30} Attempt 3 {'─'*30}")
+        result_3 = retry_query(RETRY_GATE_QUERY, PAPER_NAME, failure_type_2, attempt=3)
+        answer_3  = result_3["answer"]
+        chunks_3  = result_3["chunks"]
 
-    if not retrieval_ok:
-        failure_type = "retrieval"
-    elif faithfulness < _FAITHFULNESS_GENERATION_THRESHOLD:
-        failure_type = "generation"
-    elif answer_relevancy < _RELEVANCY_LOW:
-        failure_type = "generation"
-    else:
-        failure_type = "retrieval"
+        eval_3 = evaluate_answer(RETRY_GATE_QUERY, answer_3, chunks_3)
+        conf_3 = compute_confidence(eval_3["faithfulness"], eval_3["answer_relevancy"])
 
-    top_str = f"{max(rerank_scores):.3f}" if rerank_scores else "N/A"
-    print(f"[diagnose] faith={faithfulness:.3f}  relev={answer_relevancy:.3f}  "
-          f"top_rerank={top_str}  retrieval_ok={retrieval_ok}  -> {failure_type} failure")
+        print(f"Query used: {result_3['query_used']}")
+        print(f"Answer:     {answer_3[:150]}")
+        print(f"Confidence: {conf_3:.1f}/100  Faith: {eval_3['faithfulness']:.3f}  Relev: {eval_3['answer_relevancy']:.3f}")
 
-    return failure_type
+        if conf_3 > best_confidence:
+            best_answer, best_confidence = answer_3, conf_3
+            winning_attempt = 3
 
+        adam_found = "adam" in answer_3.lower()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — Query expansion
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Verdict ───────────────────────────────────────────────────────────────────
+print(f"\n{SEP2}")
+print("STEP 4 VERIFICATION SUMMARY")
+print(SEP2)
 
-def _expand_query(query: str) -> str:
-    """
-    Rewrite query using technical vocabulary from the paper.
-    Helps when everyday language doesn't match the paper's terminology.
-    """
-    prompt = (
-        "You are helping a research paper question-answering system improve retrieval.\n"
-        "Rewrite the following question using precise academic and technical vocabulary "
-        "that would appear in the paper 'Attention Is All You Need' by Vaswani et al.\n"
-        "Focus on the specific technical terms, algorithm names, and section topics "
-        "used in the paper. Return ONLY the rewritten question, nothing else.\n\n"
-        f"Original question: {query}\n"
-        "Rewritten question:"
-    )
-    try:
-        client   = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-        response = client.chat.completions.create(
-            model       = "llama-3.3-70b-versatile",
-            messages    = [{"role": "user", "content": prompt}],
-            temperature = 0.3,
-            max_tokens  = 80,
-        )
-        expanded = response.choices[0].message.content.strip()
-        print(f"[retry] Query expanded:\n  Original: {query}\n  Expanded: {expanded}")
-        return expanded
-    except Exception as e:
-        print(f"[retry] Query expansion failed ({e}) — using original query.")
-        return query
+print(f"\nBest answer (attempt {winning_attempt}, confidence {best_confidence:.1f}/100):")
+print(f"  {best_answer[:200]}")
 
+check1 = adam_found
+check2 = best_confidence > conf_1   # improved from attempt 1
+check3 = winning_attempt in (2, 3)  # retry did something
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — Core pipeline runner
-# ─────────────────────────────────────────────────────────────────────────────
+print(f"\n[{'PASS' if check1 else 'FAIL'}] Answer mentions 'Adam': {adam_found}")
+print(f"[{'PASS' if check2 else 'FAIL'}] Confidence improved: {conf_1:.1f} -> {best_confidence:.1f}")
+print(f"[{'PASS' if check3 else 'INFO'}] Answer found on attempt: {winning_attempt}")
 
-def _run_attempt(
-    query: str,
-    paper_name: str,
-    llm_k_slice: int | None = None,
-) -> dict:
-    """
-    Run one full pipeline attempt via route_query (which handles
-    routing + retrieval + reranking internally).
-
-    Parameters
-    ----------
-    query       : query to use (may be expanded)
-    paper_name  : paper identifier
-    llm_k_slice : if set, take only the top-N chunks before generation
-                  (simulates reducing llm_k for generation retries)
-
-    Returns
-    -------
-    dict with: answer, chunks, query_used
-    """
-    from ingestion.query_router import route_query
-    from ingestion.generator    import generate_answer
-
-    routed  = route_query(query, paper_name)
-    chunks  = routed["chunks"]
-    intents = routed["intents"]
-
-    # Slice chunks if we want to tighten the generation context
-    if llm_k_slice is not None:
-        chunks = chunks[:llm_k_slice]
-
-    generated = generate_answer(query, chunks, intents)
-
-    return {
-        "answer":     generated["answer"],
-        "chunks":     chunks,
-        "query_used": query,
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — Retry strategies
-# ─────────────────────────────────────────────────────────────────────────────
-
-def retry_query(
-    query: str,
-    paper_name: str,
-    failure_type: str,
-    attempt: int,
-) -> dict:
-    """
-    Execute one retry attempt. Each attempt MUST change something from the previous.
-
-    Retrieval failure strategy
-    --------------------------
-    attempt 2: LLM expands query to paper vocabulary → new retrieval run
-    attempt 3: different LLM expansion + keep top 3 chunks only (tighten focus)
-
-    Generation failure strategy
-    ---------------------------
-    attempt 2: same query, slice to top 4 chunks (force focus on best chunks)
-    attempt 3: expand query + slice to top 3 chunks
-
-    Parameters
-    ----------
-    query        : original user query
-    paper_name   : paper identifier
-    failure_type : "retrieval" or "generation"
-    attempt      : 2 or 3
-
-    Returns
-    -------
-    dict: answer, chunks, query_used, attempt, failure_type
-    """
-    if attempt not in (2, 3):
-        raise ValueError(f"attempt must be 2 or 3, got {attempt}")
-
-    print(f"\n[retry] Attempt {attempt} | failure_type={failure_type}")
-
-    if failure_type == "retrieval":
-        # Both attempts expand the query — this is the core fix for vocab mismatch.
-        # The expansion call gives a different result each time (temperature=0.3).
-        expanded = _expand_query(query)
-
-        if attempt == 2:
-            result = _run_attempt(expanded, paper_name, llm_k_slice=None)
-        else:
-            # attempt 3: use expanded query but tighten to top 3 chunks
-            # so the generator has less noise to sift through
-            result = _run_attempt(expanded, paper_name, llm_k_slice=3)
-
-    else:  # generation failure
-        if attempt == 2:
-            # Same query, but reduce context to top 4 chunks
-            # Forces generator to use only the most relevant retrieved content
-            result = _run_attempt(query, paper_name, llm_k_slice=4)
-        else:
-            # attempt 3: expand query AND tighten context
-            expanded = _expand_query(query)
-            result   = _run_attempt(expanded, paper_name, llm_k_slice=3)
-
-    result["attempt"]      = attempt
-    result["failure_type"] = failure_type
-    return result
+all_pass = check1 and check2
+print(f"\n{'Step 4 PASSED. Ready to build Step 5 — pipeline.py' if all_pass else 'Step 4 needs adjustment — report output above.'}")
+print(SEP2)

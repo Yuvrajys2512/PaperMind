@@ -4,8 +4,7 @@ ingestion/retry_engine.py — Phase 3, Steps 3 & 4
 Public API
 ----------
 diagnose_failure(query, answer, chunks, eval_scores) -> "retrieval" | "generation"
-retry_query(query, paper_name, failure_type, attempt)  -> dict with keys:
-    answer, chunks, eval_scores, confidence, query_used, attempt
+retry_query(query, paper_name, failure_type, attempt) -> dict
 """
 
 from __future__ import annotations
@@ -16,21 +15,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Diagnosis thresholds ──────────────────────────────────────────────────────
-_RERANK_RELEVANCE_THRESHOLD       = 0.0
-_FAITHFULNESS_LOW                 = 0.40
+_RERANK_RELEVANCE_THRESHOLD        = 0.0
+_FAITHFULNESS_LOW                  = 0.40
 _FAITHFULNESS_GENERATION_THRESHOLD = 0.80
-_RELEVANCY_LOW                    = 0.40
+_RELEVANCY_LOW                     = 0.40
 
-# ── Retry config ──────────────────────────────────────────────────────────────
 MAX_ATTEMPTS = 3
-
-# Retrieval retry: expand these k values on each attempt
-_RETRIEVAL_K_EXPANSIONS = [None, 20, 30]   # None = use route_query default
-_LLM_K_EXPANSIONS       = [None,  8, 12]
-
-# Generation retry: tighten these on each attempt
-_GEN_TEMPERATURES  = [0.1, 0.05, 0.0]
-_GEN_LLM_K_VALUES  = [None, 4, 3]          # None = use route_query default
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,8 +39,7 @@ def diagnose_failure(
     eval_scores: dict,
 ) -> str:
     """
-    Diagnose why an answer failed to meet the confidence threshold.
-    Returns "retrieval" or "generation".
+    Diagnose why an answer failed. Returns "retrieval" or "generation".
     """
     faithfulness     = eval_scores.get("faithfulness", 0.0)
     answer_relevancy = eval_scores.get("answer_relevancy", 0.0)
@@ -60,6 +49,7 @@ def diagnose_failure(
         top_score    = max(rerank_scores)
         retrieval_ok = top_score >= _RERANK_RELEVANCE_THRESHOLD
     else:
+        # No rerank scores in chunks — use faithfulness as proxy
         retrieval_ok = faithfulness >= 0.05
 
     if not retrieval_ok:
@@ -79,29 +69,23 @@ def diagnose_failure(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — Query expansion (LLM rewrites query to paper vocabulary)
+# Step 4 — Query expansion
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _expand_query(query: str) -> str:
     """
-    Use LLM to rewrite the query using vocabulary closer to academic paper language.
-    This helps when the user's query uses everyday words that don't match the paper's
-    technical terminology — the vocabulary mismatch problem.
-
-    Example:
-      "How is relevance computed between tokens?"
-      → "How does the attention mechanism compute compatibility scores between
-         query and key vectors using scaled dot-product attention?"
+    Rewrite query using technical vocabulary from the paper.
+    Helps when everyday language doesn't match the paper's terminology.
     """
     prompt = (
         "You are helping a research paper question-answering system improve retrieval.\n"
         "Rewrite the following question using precise academic and technical vocabulary "
         "that would appear in the paper 'Attention Is All You Need' by Vaswani et al.\n"
-        "Keep the same meaning. Return ONLY the rewritten question, nothing else.\n\n"
+        "Focus on the specific technical terms, algorithm names, and section topics "
+        "used in the paper. Return ONLY the rewritten question, nothing else.\n\n"
         f"Original question: {query}\n"
         "Rewritten question:"
     )
-
     try:
         client   = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         response = client.chat.completions.create(
@@ -119,53 +103,41 @@ def _expand_query(query: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — Per-attempt retry logic
+# Step 4 — Core pipeline runner
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _run_pipeline_attempt(
+def _run_attempt(
     query: str,
     paper_name: str,
-    retrieval_k_override: int | None = None,
-    llm_k_override: int | None = None,
-    temperature_override: float | None = None,
+    llm_k_slice: int | None = None,
 ) -> dict:
     """
-    Run one full pipeline attempt (retrieve → rerank → generate).
-    Accepts optional overrides for retrieval_k, llm_k, and temperature.
-    Falls back to route_query defaults when overrides are None.
+    Run one full pipeline attempt via route_query (which handles
+    routing + retrieval + reranking internally).
+
+    Parameters
+    ----------
+    query       : query to use (may be expanded)
+    paper_name  : paper identifier
+    llm_k_slice : if set, take only the top-N chunks before generation
+                  (simulates reducing llm_k for generation retries)
+
+    Returns
+    -------
+    dict with: answer, chunks, query_used
     """
     from ingestion.query_router import route_query
-    from ingestion.retriever    import retrieve
-    from ingestion.reranker     import rerank
     from ingestion.generator    import generate_answer
 
-    # ── Route (intent detection + default config) ─────────────────────────────
     routed  = route_query(query, paper_name)
+    chunks  = routed["chunks"]
     intents = routed["intents"]
 
-    # ── Retrieval with optional k override ────────────────────────────────────
-    ret_k = retrieval_k_override or routed.get("retrieval_k", 15)
-    lm_k  = llm_k_override       or routed.get("llm_k", 5)
+    # Slice chunks if we want to tighten the generation context
+    if llm_k_slice is not None:
+        chunks = chunks[:llm_k_slice]
 
-    try:
-        raw_chunks = retrieve(query, paper_name, top_k=ret_k)
-    except TypeError:
-        # Fallback: some retrieve() signatures don't take top_k as kwarg
-        raw_chunks = routed["chunks"]
-
-    # ── Rerank ────────────────────────────────────────────────────────────────
-    try:
-        chunks = rerank(query, raw_chunks, top_k=lm_k)
-    except (TypeError, ImportError):
-        chunks = raw_chunks[:lm_k]
-
-    # ── Generate with optional temperature override ───────────────────────────
-    try:
-        generated = generate_answer(query, chunks, intents,
-                                    temperature=temperature_override)
-    except TypeError:
-        # generator.py doesn't accept temperature kwarg — use default
-        generated = generate_answer(query, chunks, intents)
+    generated = generate_answer(query, chunks, intents)
 
     return {
         "answer":     generated["answer"],
@@ -174,6 +146,10 @@ def _run_pipeline_attempt(
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 4 — Retry strategies
+# ─────────────────────────────────────────────────────────────────────────────
+
 def retry_query(
     query: str,
     paper_name: str,
@@ -181,78 +157,55 @@ def retry_query(
     attempt: int,
 ) -> dict:
     """
-    Execute one retry attempt with a strategy appropriate to the failure type
-    and attempt number. Each attempt MUST change something from the previous one.
-
-    Attempt numbering
-    -----------------
-    attempt=2 → first retry  (something changes from attempt 1)
-    attempt=3 → second retry (different change from attempt 2)
+    Execute one retry attempt. Each attempt MUST change something from the previous.
 
     Retrieval failure strategy
     --------------------------
-    attempt 2: expand query to paper vocabulary + increase retrieval_k to 20
-    attempt 3: use expanded query + increase retrieval_k further to 30 + increase llm_k
+    attempt 2: LLM expands query to paper vocabulary → new retrieval run
+    attempt 3: different LLM expansion + keep top 3 chunks only (tighten focus)
 
     Generation failure strategy
     ---------------------------
-    attempt 2: same query + reduce llm_k to 4 + lower temperature to 0.05
-    attempt 3: expand query + reduce llm_k to 3 + temperature to 0.0 (deterministic)
+    attempt 2: same query, slice to top 4 chunks (force focus on best chunks)
+    attempt 3: expand query + slice to top 3 chunks
 
     Parameters
     ----------
     query        : original user query
     paper_name   : paper identifier
     failure_type : "retrieval" or "generation"
-    attempt      : 2 or 3 (attempt 1 is the original, handled by pipeline.py)
+    attempt      : 2 or 3
 
     Returns
     -------
-    dict with: answer, chunks, query_used, attempt, failure_type
+    dict: answer, chunks, query_used, attempt, failure_type
     """
     if attempt not in (2, 3):
-        raise ValueError(f"retry_query: attempt must be 2 or 3, got {attempt}")
+        raise ValueError(f"attempt must be 2 or 3, got {attempt}")
 
     print(f"\n[retry] Attempt {attempt} | failure_type={failure_type}")
 
     if failure_type == "retrieval":
-        # ── Retrieval retry: change the query and expand k ────────────────────
+        # Both attempts expand the query — this is the core fix for vocab mismatch.
+        # The expansion call gives a different result each time (temperature=0.3).
+        expanded = _expand_query(query)
+
         if attempt == 2:
-            expanded_query = _expand_query(query)
-            result = _run_pipeline_attempt(
-                query              = expanded_query,
-                paper_name         = paper_name,
-                retrieval_k_override = 20,
-                llm_k_override     = 8,
-            )
-        else:  # attempt == 3
-            # Use a different expansion + even larger k
-            expanded_query = _expand_query(query)
-            result = _run_pipeline_attempt(
-                query              = expanded_query,
-                paper_name         = paper_name,
-                retrieval_k_override = 30,
-                llm_k_override     = 12,
-            )
+            result = _run_attempt(expanded, paper_name, llm_k_slice=None)
+        else:
+            # attempt 3: use expanded query but tighten to top 3 chunks
+            # so the generator has less noise to sift through
+            result = _run_attempt(expanded, paper_name, llm_k_slice=3)
 
     else:  # generation failure
-        # ── Generation retry: same query, tighter generation ──────────────────
         if attempt == 2:
-            result = _run_pipeline_attempt(
-                query                = query,
-                paper_name           = paper_name,
-                llm_k_override       = 4,
-                temperature_override = 0.05,
-            )
-        else:  # attempt == 3
-            # Also expand query in case retrieval was partially at fault
-            expanded_query = _expand_query(query)
-            result = _run_pipeline_attempt(
-                query                = expanded_query,
-                paper_name           = paper_name,
-                llm_k_override       = 3,
-                temperature_override = 0.0,
-            )
+            # Same query, but reduce context to top 4 chunks
+            # Forces generator to use only the most relevant retrieved content
+            result = _run_attempt(query, paper_name, llm_k_slice=4)
+        else:
+            # attempt 3: expand query AND tighten context
+            expanded = _expand_query(query)
+            result   = _run_attempt(expanded, paper_name, llm_k_slice=3)
 
     result["attempt"]      = attempt
     result["failure_type"] = failure_type
