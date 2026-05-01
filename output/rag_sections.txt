@@ -1,0 +1,146 @@
+--- Abstract (Page 1) ---
+Large pre-trained language models have been shown to store factual knowledge
+in their parameters, and achieve state-of-the-art results when ﬁne-tuned on down-
+stream NLP tasks. However, their ability to access and precisely manipulate knowl-
+edge is still limited, and hence on knowledge-intensive ta...
+
+--- 1 Introduction (Page 1) ---
+Pre-trained neural language models have been shown to learn a substantial amount of in-depth knowl-
+edge from data [47]. They can do so without any access to an external memory, as a parameterized
+implicit knowledge base [51, 52]. While this development is exciting, such models do have down-
+sides: ...
+
+--- 2 Methods (Page 2) ---
+We explore RAG models, which use the input sequence x to retrieve text documents z and use them
+as additional context when generating the target sequence y. As shown in Figure 1, our models
+leverage two components: (i) a retriever p (z|x) with parameters η that returns (top-K truncated)
+η
+distributi...
+
+--- 2.1 Models (Page 3) ---
+RAG-Sequence Model The RAG-Sequence model uses the same retrieved document to generate
+the complete sequence. Technically, it treats the retrieved document as a single latent variable that
+is marginalized to get the seq2seq probability p(y|x) via a top-K approximation. Concretely, the
+top K document...
+
+--- 2.2 Retriever: DPR (Page 3) ---
+The retrieval component p (z|x) is based on DPR [26]. DPR follows a bi-encoder architecture:
+η
+(cid:0) (cid:1)
+p (z|x) ∝ exp d(z)(cid:62)q(x) d(z) = BERT (z), q(x) = BERT (x)
+η d q
+where d(z) is a dense representation of a document produced by a BERT document encoder [8],
+BASE
+and q(x) a query repre...
+
+--- 2.3 Generator: BART (Page 3) ---
+The generator component p (y |x,z,y ) could be modelled using any encoder-decoder. We use
+θ i 1:i−1
+BART-large [32], a pre-trained seq2seq transformer [58] with 400M parameters. To combine the input
+x with the retrieved content z when generating from BART, we simply concatenate them. BART was
+pre-tr...
+
+--- 2.4 Training (Page 3) ---
+We jointly train the retriever and generator components without any direct supervision on what
+document should be retrieved. Given a ﬁne-tuning training corpus of input/output pairs (x ,y ), we
+j j
+3
+(cid:80)
+minimize the negative marginal log-likelihood of each target, −logp(y |x ) using stochastic...
+
+--- 2.5 Decoding (Page 4) ---
+At test time, RAG-Sequence and RAG-Token require different ways to approximate argmax p(y|x).
+y
+RAG-Token The RAG-Token model can be seen as a standard, autoregressive seq2seq genera-
+(cid:80)
+tor with transition probability: p(cid:48) (y |x,y ) = p (z |x)p (y |x,z ,y ) To
+θ i 1:i−1 z∈top-k(p(·|x)) ...
+
+--- 3 Experiments (Page 4) ---
+We experiment with RAG in a wide range of knowledge-intensive tasks. For all experiments, we use
+a single Wikipedia dump for our non-parametric knowledge source. Following Lee et al. [31] and
+Karpukhin et al. [26], we use the December 2018 dump. Each Wikipedia article is split into disjoint
+100-word...
+
+--- 3.1 Open-domain Question Answering (Page 4) ---
+Open-domain question answering (QA) is an important real-world application and common testbed
+for knowledge-intensive tasks [20]. We treat questions and answers as input-output text pairs (x,y)
+and train RAG by directly minimizing the negative log-likelihood of answers. We compare RAG to
+the popular...
+
+--- 3.2 Abstractive Question Answering (Page 4) ---
+RAG models can go beyond simple extractive QA and answer questions with free-form, abstractive
+text generation. To test RAG’s natural language generation (NLG) in a knowledge-intensive setting,
+we use the MSMARCO NLG task v2.1 [43]. The task consists of questions, ten gold passages
+retrieved from a ...
+
+--- 3.3 Jeopardy Question Generation (Page 5) ---
+To evaluate RAG’s generation abilities in a non-QA setting, we study open-domain question gen-
+eration. Rather than use questions from standard open-domain QA tasks, which typically consist
+of short, simple questions, we propose the more demanding task of generating Jeopardy questions.
+Jeopardy is a...
+
+--- 3.4 Fact Veriﬁcation (Page 5) ---
+FEVER [56] requires classifying whether a natural language claim is supported or refuted by
+Wikipedia, or whether there is not enough information to decide. The task requires retrieving
+evidence from Wikipedia relating to the claim and then reasoning over this evidence to classify
+whether the claim ...
+
+--- 4 Results (Page 5) ---
+...
+
+--- 4.1 Open-domain Question Answering (Page 5) ---
+Table 1 shows results for RAG along with state-of-the-art models. On all four open-domain QA
+tasks, RAG sets a new state of the art (only on the T5-comparable split for TQA). RAG combines
+the generation ﬂexibility of the “closed-book” (parametric only) approaches and the performance of
+"open-book" r...
+
+--- 4.2 Abstractive Question Answering (Page 6) ---
+As shown in Table 2, RAG-Sequence outperforms BART on Open MS-MARCO NLG by 2.6 Bleu
+points and 2.6 Rouge-L points. RAG approaches state-of-the-art model performance, which is
+impressive given that (i) those models access gold passages with speciﬁc information required to
+generate the reference answe...
+
+--- 4.3 Jeopardy Question Generation (Page 6) ---
+Table 2 shows that RAG-Token performs better than RAG-Sequence on Jeopardy question generation,
+with both models outperforming BART on Q-BLEU-1. 4 shows human evaluation results, over 452
+pairs of generations from BART and RAG-Token. Evaluators indicated that BART was more factual
+than RAG in only 7...
+
+--- 4.4 Fact Veriﬁcation (Page 6) ---
+Table 2 shows our results on FEVER. For 3-way classiﬁcation, RAG scores are within 4.3% of
+state-of-the-art models, which are complex pipeline systems with domain-speciﬁc architectures and
+substantial engineering, trained using intermediate retrieval supervision, which RAG does not require.
+6
+Docume...
+
+--- 4.5 Additional Results (Page 7) ---
+Generation Diversity Section 4.3 shows that RAG models are more factual and speciﬁc than
+BART for Jeopardy question generation. Following recent work on diversity-promoting decoding
+[33, 59, 39], we also investigate generation diversity by calculating the ratio of distinct ngrams to
+total ngrams gen...
+
+--- 5 Related Work (Page 8) ---
+Single-Task Retrieval Prior work has shown that retrieval improves performance across a variety of
+NLP tasks when considered in isolation. Such tasks include open-domain question answering [5, 29],
+fact checking [56], fact completion [48], long-form question answering [12], Wikipedia article
+generat...
+
+--- 6 Discussion (Page 9) ---
+In this work, we presented hybrid generation models with access to parametric and non-parametric
+memory. We showed that our RAG models obtain state of the art results on open-domain QA. We
+found that people prefer RAG’s generation over purely parametric BART, ﬁnding RAG more factual
+and speciﬁc. We ...
+
+--- Broader Impact (Page 10) ---
+This work offers several positive societal beneﬁts over previous work: the fact that it is more
+strongly grounded in real factual knowledge (in this case Wikipedia) makes it “hallucinate” less
+with generations that are more factual, and offers more control and interpretability. RAG could be
+employed...
+
+--- Acknowledgments (Page 10) ---
+The authors would like to thank the reviewers for their thoughtful and constructive feedback on this
+paper, as well as HuggingFace for their help in open-sourcing code to run RAG models. The authors
+would also like to thank Kyunghyun Cho and Sewon Min for productive discussions and advice. EP
+thanks...
+
