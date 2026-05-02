@@ -38,5 +38,13 @@
     "uploaded_at": "2026-05-02T10:16:17.089958",
     "completed_at": "2026-05-02T10:16:59.781838",
     "error": null
+  },
+  "f338979a-faff-4745-9632-8e48931a8a51": {
+    "paper_id": "f338979a-faff-4745-9632-8e48931a8a51",
+    "filename": "Retrieval-Augmented Generation for.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-02T10:23:41.237460",
+    "completed_at": "2026-05-02T10:24:20.360971",
+    "error": null
   }
 }
