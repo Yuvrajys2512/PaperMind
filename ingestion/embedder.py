@@ -60,7 +60,7 @@ def embed_and_store(chunks: list, paper_name: str) -> None:
     
     # Convert all texts to vectors in one batch call
     # embeddings is a list of lists — one vector per chunk
-    embeddings = model.encode(texts, show_progress_bar=True)
+    embeddings = model.encode(texts, show_progress_bar=False)
     
     # Prepare metadata for each chunk
     # ChromaDB metadata values must be strings, ints, or floats — not lists

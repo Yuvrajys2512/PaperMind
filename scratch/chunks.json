@@ -1,0 +1,532 @@
+[
+  {
+    "chunk_id": 1,
+    "section": "Abstract",
+    "section_type": "SECTION",
+    "page_num": 1,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "Large pre-trained language models have been shown to store factual knowledge\nin their parameters, and achieve state-of-the-art results when \ufb01ne-tuned on down-\nstream NLP tasks. However, their ability to access and precisely manipulate knowl-\nedge is still limited, and hence on knowledge-intensive tasks, their performance\nlags behind task-speci\ufb01c architectures. Additionally, providing provenance for their\ndecisions and updating their world knowledge remain open research problems. Pre-\ntrained models with a differentiable access mechanism to explicit non-parametric\nmemory have so far been only investigated for extractive downstream tasks. We\nexplore a general-purpose \ufb01ne-tuning recipe for retrieval-augmented generation\n(RAG) \u2014 models which combine pre-trained parametric and non-parametric mem-\nory for language generation. We introduce RAG models where the parametric\nmemory is a pre-trained seq2seq model and the non-parametric memory is a dense\nvector index of Wikipedia, accessed with a pre-trained neural retriever. We com-\npare two RAG formulations, one which conditions on the same retrieved passages\nacross the whole generated sequence, and another which can use different passages\nper token. We \ufb01ne-tune and evaluate our models on",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 2,
+    "section": "Abstract",
+    "section_type": "SECTION",
+    "page_num": 1,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": " retriever. We com-\npare two RAG formulations, one which conditions on the same retrieved passages\nacross the whole generated sequence, and another which can use different passages\nper token. We \ufb01ne-tune and evaluate our models on a wide range of knowledge-\nintensive NLP tasks and set the state of the art on three open domain QA tasks,\noutperforming parametric seq2seq models and task-speci\ufb01c retrieve-and-extract\narchitectures. For language generation tasks, we \ufb01nd that RAG models generate\nmore speci\ufb01c, diverse and factual language than a state-of-the-art parametric-only\nseq2seq baseline.",
+    "token_count": 141
+  },
+  {
+    "chunk_id": 3,
+    "section": "1 Introduction",
+    "section_type": "SECTION",
+    "page_num": 1,
+    "chunk_index": 0,
+    "total_chunks_in_section": 6,
+    "text": "Pre-trained neural language models have been shown to learn a substantial amount of in-depth knowl-\nedge from data [47]. They can do so without any access to an external memory, as a parameterized\nimplicit knowledge base [51, 52]. While this development is exciting, such models do have down-\nsides: They cannot easily expand or revise their memory, can\u2019t straightforwardly provide insight into\ntheir predictions, and may produce \u201challucinations\u201d [38]. Hybrid models that combine parametric\nmemory with non-parametric (i.e., retrieval-based) memories [20, 26, 48] can address some of these\nissues because knowledge can be directly revised and expanded, and accessed knowledge can be\ninspected and interpreted. REALM [20] and ORQA [31], two recently introduced models that\ncombine masked language models [8] with a differentiable retriever, have shown promising results,\nThe\tmiddle\tear\tincludes\nDefine\t\"middle\tear\"(x)\nEnd-to-End Backprop through q and\u00a0p the\ttympanic\tcavity\tand\n\u03b8\nQuestion Answering: the\tthree\tossicles.\t\t(y)\nQuestion Query Query Retriever p Document Generator\u00a0p Question Answering",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 4,
+    "section": "1 Introduction",
+    "section_type": "SECTION",
+    "page_num": 1,
+    "chunk_index": 1,
+    "total_chunks_in_section": 6,
+    "text": "End-to-End Backprop through q and\u00a0p the\ttympanic\tcavity\tand\n\u03b8\nQuestion Answering: the\tthree\tossicles.\t\t(y)\nQuestion Query Query Retriever p Document Generator\u00a0p Question Answering:\n\u03b7 \u03b8\nEncoder Index Answer Generation\n(Non-Parametric) (Parametric)\nBarack\tObama\twas d(z)\nq(x) z supports\t(y)\nborn\tin\tHawaii.(x) 4\nz Margin- Fact Veri\ufb01cation:\nFact Veri\ufb01cation: Fact Query 3\nLabel Generation\nz2 alize\nThe\tDivine q MIPS z p\n1 \u03b8 This\t14th\tcentury\twork\nComedy\t(x)\nis\tdivided\tinto\t3\nJeopardy Question sections:\t\"Inferno\",\nGeneration: \"Purgatorio\"\t&\nAnswer Query \"Paradiso\"\t\t\t\t\t\t\t\t\t(y)\nQuestion Generation\nFigure 1: Overview of our approach. We combine a pre-trained retriever (Query Encoder + Document\nIndex) with a pre-trained seq2seq model (Generator) and \ufb01ne-tune end-to-end. For query x, we use\nMaximum Inner Product Search (MIPS) to",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 5,
+    "section": "1 Introduction",
+    "section_type": "SECTION",
+    "page_num": 1,
+    "chunk_index": 2,
+    "total_chunks_in_section": 6,
+    "text": " a pre-trained retriever (Query Encoder + Document\nIndex) with a pre-trained seq2seq model (Generator) and \ufb01ne-tune end-to-end. For query x, we use\nMaximum Inner Product Search (MIPS) to \ufb01nd the top-K documents z . For \ufb01nal prediction y, we\ni\ntreat z as a latent variable and marginalize over seq2seq predictions given different documents.\nbut have only explored open-domain extractive question answering. Here, we bring hybrid parametric\nand non-parametric memory to the \u201cworkhorse of NLP,\u201d i.e. sequence-to-sequence (seq2seq) models.\nWe endow pre-trained, parametric-memory generation models with a non-parametric memory through\na general-purpose \ufb01ne-tuning approach which we refer to as retrieval-augmented generation (RAG).\nWe build RAG models where the parametric memory is a pre-trained seq2seq transformer, and the\nnon-parametric memory is a dense vector index of Wikipedia, accessed with a pre-trained neural\nretriever. We combine these components in a probabilistic model trained end-to-end (Fig. 1). The\nretriever (Dense Passage Retriever [26",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 6,
+    "section": "1 Introduction",
+    "section_type": "SECTION",
+    "page_num": 1,
+    "chunk_index": 3,
+    "total_chunks_in_section": 6,
+    "text": " dense vector index of Wikipedia, accessed with a pre-trained neural\nretriever. We combine these components in a probabilistic model trained end-to-end (Fig. 1). The\nretriever (Dense Passage Retriever [26], henceforth DPR) provides latent documents conditioned on\nthe input, and the seq2seq model (BART [32]) then conditions on these latent documents together with\nthe input to generate the output. We marginalize the latent documents with a top-K approximation,\neither on a per-output basis (assuming the same document is responsible for all tokens) or a per-token\nbasis (where different documents are responsible for different tokens). Like T5 [51] or BART, RAG\ncan be \ufb01ne-tuned on any seq2seq task, whereby both the generator and retriever are jointly learned.\nTherehasbeenextensivepreviousworkproposingarchitecturestoenrichsystemswithnon-parametric\nmemory which are trained from scratch for speci\ufb01c tasks, e.g. memory networks [64, 55], stack-\naugmented networks [25] and memory layers [30]. In contrast, we explore a setting where both\nparametric and non-parametric memory components are pre-trained and pre",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 7,
+    "section": "1 Introduction",
+    "section_type": "SECTION",
+    "page_num": 1,
+    "chunk_index": 4,
+    "total_chunks_in_section": 6,
+    "text": " tasks, e.g. memory networks [64, 55], stack-\naugmented networks [25] and memory layers [30]. In contrast, we explore a setting where both\nparametric and non-parametric memory components are pre-trained and pre-loaded with extensive\nknowledge. Crucially, by using pre-trained access mechanisms, the ability to access knowledge is\npresent without additional training.\nOur results highlight the bene\ufb01ts of combining parametric and non-parametric memory with genera-\ntion for knowledge-intensive tasks\u2014tasks that humans could not reasonably be expected to perform\nwithout access to an external knowledge source. Our RAG models achieve state-of-the-art results\non open Natural Questions [29], WebQuestions [3] and CuratedTrec [2] and strongly outperform\nrecent approaches that use specialised pre-training objectives on TriviaQA [24]. Despite these being\nextractive tasks, we \ufb01nd that unconstrained generation outperforms previous extractive approaches.\nFor knowledge-intensive generation, we experiment with MS-MARCO [1] and Jeopardy question\ngeneration, and we \ufb01nd that our models generate responses that are more factual, speci\ufb01c, and\ndiverse than a BART baseline. For FEVER",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 8,
+    "section": "1 Introduction",
+    "section_type": "SECTION",
+    "page_num": 1,
+    "chunk_index": 5,
+    "total_chunks_in_section": 6,
+    "text": " MS-MARCO [1] and Jeopardy question\ngeneration, and we \ufb01nd that our models generate responses that are more factual, speci\ufb01c, and\ndiverse than a BART baseline. For FEVER [56] fact veri\ufb01cation, we achieve results within 4.3% of\nstate-of-the-art pipeline models which use strong retrieval supervision. Finally, we demonstrate that\nthe non-parametric memory can be replaced to update the models\u2019 knowledge as the world changes.1",
+    "token_count": 109
+  },
+  {
+    "chunk_id": 9,
+    "section": "2 Methods",
+    "section_type": "SECTION",
+    "page_num": 2,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "We explore RAG models, which use the input sequence x to retrieve text documents z and use them\nas additional context when generating the target sequence y. As shown in Figure 1, our models\nleverage two components: (i) a retriever p (z|x) with parameters \u03b7 that returns (top-K truncated)\n\u03b7\ndistributions over text passages given a query x and (ii) a generator p (y |x,z,y ) parametrized\n\u03b8 i 1:i\u22121\n1Code to run experiments with RAG has been open-sourced as part of the HuggingFace Transform-\ners Library [66] and can be found at https://github.com/huggingface/transformers/blob/master/\nexamples/rag/. An interactive demo of RAG models can be found at https://huggingface.co/rag/\n2\nby \u03b8 that generates a current token based on a context of the previous i\u22121 tokens y , the original\n1:i\u22121\ninput x and a retrieved passage z.\nTo train the retriever and generator end-to-end, we treat the retrieved document as a latent variable.\nWe propose two models that marginalize over the latent documents in different ways to produce a\ndistribution over generated text",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 10,
+    "section": "2 Methods",
+    "section_type": "SECTION",
+    "page_num": 2,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": " x and a retrieved passage z.\nTo train the retriever and generator end-to-end, we treat the retrieved document as a latent variable.\nWe propose two models that marginalize over the latent documents in different ways to produce a\ndistribution over generated text. In one approach, RAG-Sequence, the model uses the same document\nto predict each target token. The second approach, RAG-Token, can predict each target token based\non a different document. In the following, we formally introduce both models and then describe the\np and p components, as well as the training and decoding procedure.\n\u03b7 \u03b8",
+    "token_count": 124
+  },
+  {
+    "chunk_id": 11,
+    "section": "2.1 Models",
+    "section_type": "SUBSECTION",
+    "page_num": 3,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "RAG-Sequence Model The RAG-Sequence model uses the same retrieved document to generate\nthe complete sequence. Technically, it treats the retrieved document as a single latent variable that\nis marginalized to get the seq2seq probability p(y|x) via a top-K approximation. Concretely, the\ntop K documents are retrieved using the retriever, and the generator produces the output sequence\nprobability for each document, which are then marginalized,\nN\n(cid:88) (cid:88) (cid:89)\np (y|x) \u2248 p (z|x)p (y|x,z) = p (z|x) p (y |x,z,y )\nRAG-Sequence \u03b7 \u03b8 \u03b7 \u03b8 i 1:i\u22121\nz\u2208top-k(p(\u00b7|x)) z\u2208top-k(p(\u00b7|x)) i\nRAG-Token Model In the RAG-Token model we can draw a different latent document for each\ntarget token and marginalize accordingly. This allows the generator to choose content from several\ndocuments when producing an answer. Concretely, the top K documents are retrieved using the\nretriever, and then the generator produces a distribution for the next output token for each document",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 12,
+    "section": "2.1 Models",
+    "section_type": "SUBSECTION",
+    "page_num": 3,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": " accordingly. This allows the generator to choose content from several\ndocuments when producing an answer. Concretely, the top K documents are retrieved using the\nretriever, and then the generator produces a distribution for the next output token for each document,\nbefore marginalizing, and repeating the process with the following output token, Formally, we de\ufb01ne:\nN\n(cid:89) (cid:88)\np (y|x) \u2248 p (z|x)p (y |x,z,y )\nRAG-Token \u03b7 \u03b8 i 1:i\u22121\ni z\u2208top-k(p(\u00b7|x))\nFinally, we note that RAG can be used for sequence classi\ufb01cation tasks by considering the target class\nas a target sequence of length one, in which case RAG-Sequence and RAG-Token are equivalent.",
+    "token_count": 176
+  },
+  {
+    "chunk_id": 13,
+    "section": "2.2 Retriever: DPR",
+    "section_type": "SUBSECTION",
+    "page_num": 3,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "The retrieval component p (z|x) is based on DPR [26]. DPR follows a bi-encoder architecture:\n\u03b7\n(cid:0) (cid:1)\np (z|x) \u221d exp d(z)(cid:62)q(x) d(z) = BERT (z), q(x) = BERT (x)\n\u03b7 d q\nwhere d(z) is a dense representation of a document produced by a BERT document encoder [8],\nBASE\nand q(x) a query representation produced by a query encoder, also based on BERT . Calculating\nBASE\ntop-k(p (\u00b7|x)), the list of k documents z with highest prior probability p (z|x), is a Maximum Inner\n\u03b7 \u03b7\nProduct Search (MIPS) problem, which can be approximately solved in sub-linear time [23]. We use\na pre-trained bi-encoder from DPR to initialize our retriever and to build the document index. This\nretriever was trained to retrieve documents which contain answers to TriviaQA [24] questions and\nNatural Questions [29]. We refer to the document index as the non-parametric memory.",
+    "token_count": 237
+  },
+  {
+    "chunk_id": 14,
+    "section": "2.2 Retriever: DPR",
+    "section_type": "SUBSECTION",
+    "page_num": 3,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": " which contain answers to TriviaQA [24] questions and\nNatural Questions [29]. We refer to the document index as the non-parametric memory.",
+    "token_count": 31
+  },
+  {
+    "chunk_id": 15,
+    "section": "2.3 Generator: BART",
+    "section_type": "SUBSECTION",
+    "page_num": 3,
+    "chunk_index": 0,
+    "total_chunks_in_section": 1,
+    "text": "The generator component p (y |x,z,y ) could be modelled using any encoder-decoder. We use\n\u03b8 i 1:i\u22121\nBART-large [32], a pre-trained seq2seq transformer [58] with 400M parameters. To combine the input\nx with the retrieved content z when generating from BART, we simply concatenate them. BART was\npre-trained using a denoising objective and a variety of different noising functions. It has obtained\nstate-of-the-art results on a diverse set of generation tasks and outperforms comparably-sized T5\nmodels [32]. We refer to the BART generator parameters \u03b8 as the parametric memory henceforth.",
+    "token_count": 145
+  },
+  {
+    "chunk_id": 16,
+    "section": "2.4 Training",
+    "section_type": "SUBSECTION",
+    "page_num": 3,
+    "chunk_index": 0,
+    "total_chunks_in_section": 1,
+    "text": "We jointly train the retriever and generator components without any direct supervision on what\ndocument should be retrieved. Given a \ufb01ne-tuning training corpus of input/output pairs (x ,y ), we\nj j\n3\n(cid:80)\nminimize the negative marginal log-likelihood of each target, \u2212logp(y |x ) using stochastic\nj j j\ngradient descent with Adam [28]. Updating the document encoder BERT during training is costly as\nd\nit requires the document index to be periodically updated as REALM does during pre-training [20].\nWe do not \ufb01nd this step necessary for strong performance, and keep the document encoder (and\nindex) \ufb01xed, only \ufb01ne-tuning the query encoder BERT and the BART generator.\nq",
+    "token_count": 161
+  },
+  {
+    "chunk_id": 17,
+    "section": "2.5 Decoding",
+    "section_type": "SUBSECTION",
+    "page_num": 4,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "At test time, RAG-Sequence and RAG-Token require different ways to approximate argmax p(y|x).\ny\nRAG-Token The RAG-Token model can be seen as a standard, autoregressive seq2seq genera-\n(cid:80)\ntor with transition probability: p(cid:48) (y |x,y ) = p (z |x)p (y |x,z ,y ) To\n\u03b8 i 1:i\u22121 z\u2208top-k(p(\u00b7|x)) \u03b7 i \u03b8 i i 1:i\u22121\ndecode, we can plug p(cid:48) (y |x,y ) into a standard beam decoder.\n\u03b8 i 1:i\u22121\nRAG-Sequence For RAG-Sequence, the likelihood p(y|x) does not break into a conventional per-\ntoken likelihood, hence we cannot solve it with a single beam search. Instead, we run beam search for\neach document z, scoring each hypothesis using p (y |x,z,y ). This yields a set of hypotheses\n\u03b8 i 1:i\u22121\nY , some of which may not have appeared in the beams of all documents. To estimate the probability\nof an hypothesis y we run an additional forward pass for each",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 18,
+    "section": "2.5 Decoding",
+    "section_type": "SUBSECTION",
+    "page_num": 4,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": ",y ). This yields a set of hypotheses\n\u03b8 i 1:i\u22121\nY , some of which may not have appeared in the beams of all documents. To estimate the probability\nof an hypothesis y we run an additional forward pass for each document z for which y does not\nappear in the beam, multiply generator probability with p (z|x) and then sum the probabilities across\n\u03b7\nbeams for the marginals. We refer to this decoding procedure as \u201cThorough Decoding.\u201d For longer\noutput sequences, |Y | can become large, requiring many forward passes. For more ef\ufb01cient decoding,\nwe can make a further approximation that p (y|x,z ) \u2248 0 where y was not generated during beam\n\u03b8 i\nsearch from x,z . This avoids the need to run additional forward passes once the candidate set Y has\ni\nbeen generated. We refer to this decoding procedure as \u201cFast Decoding.\u201d",
+    "token_count": 193
+  },
+  {
+    "chunk_id": 19,
+    "section": "3 Experiments",
+    "section_type": "SECTION",
+    "page_num": 4,
+    "chunk_index": 0,
+    "total_chunks_in_section": 1,
+    "text": "We experiment with RAG in a wide range of knowledge-intensive tasks. For all experiments, we use\na single Wikipedia dump for our non-parametric knowledge source. Following Lee et al. [31] and\nKarpukhin et al. [26], we use the December 2018 dump. Each Wikipedia article is split into disjoint\n100-word chunks, to make a total of 21M documents. We use the document encoder to compute an\nembedding for each document, and build a single MIPS index using FAISS [23] with a Hierarchical\nNavigable Small World approximation for fast retrieval [37]. During training, we retrieve the top\nk documents for each query. We consider k \u2208 {5,10} for training and set k for test time using dev\ndata. We now discuss experimental details for each task.",
+    "token_count": 171
+  },
+  {
+    "chunk_id": 20,
+    "section": "3.1 Open-domain Question Answering",
+    "section_type": "SUBSECTION",
+    "page_num": 4,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "Open-domain question answering (QA) is an important real-world application and common testbed\nfor knowledge-intensive tasks [20]. We treat questions and answers as input-output text pairs (x,y)\nand train RAG by directly minimizing the negative log-likelihood of answers. We compare RAG to\nthe popular extractive QA paradigm [5, 7, 31, 26], where answers are extracted spans from retrieved\ndocuments, relying primarily on non-parametric knowledge. We also compare to \u201cClosed-Book\nQA\u201d approaches [52], which, like RAG, generate answers, but which do not exploit retrieval, instead\nrelying purely on parametric knowledge. We consider four popular open-domain QA datasets: Natural\nQuestions (NQ) [29], TriviaQA (TQA) [24]. WebQuestions (WQ) [3] and CuratedTrec (CT) [2]. As\nCT and WQ are small, we follow DPR [26] by initializing CT and WQ models with our NQ RAG\nmodel. We use the same train/dev/test splits as prior work [31, 26] and report Exact Match (EM)\nscores. For TQA, to compare with T5 [52], we",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 21,
+    "section": "3.1 Open-domain Question Answering",
+    "section_type": "SUBSECTION",
+    "page_num": 4,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": "Q models with our NQ RAG\nmodel. We use the same train/dev/test splits as prior work [31, 26] and report Exact Match (EM)\nscores. For TQA, to compare with T5 [52], we also evaluate on the TQA Wiki test set.",
+    "token_count": 60
+  },
+  {
+    "chunk_id": 22,
+    "section": "3.2 Abstractive Question Answering",
+    "section_type": "SUBSECTION",
+    "page_num": 4,
+    "chunk_index": 0,
+    "total_chunks_in_section": 1,
+    "text": "RAG models can go beyond simple extractive QA and answer questions with free-form, abstractive\ntext generation. To test RAG\u2019s natural language generation (NLG) in a knowledge-intensive setting,\nwe use the MSMARCO NLG task v2.1 [43]. The task consists of questions, ten gold passages\nretrieved from a search engine for each question, and a full sentence answer annotated from the\nretrieved passages. We do not use the supplied passages, only the questions and answers, to treat\n4\nMSMARCO as an open-domain abstractive QA task. MSMARCO has some questions that cannot be\nanswered in a way that matches the reference answer without access to the gold passages, such as\n\u201cWhat is the weather in Volcano, CA?\u201d so performance will be lower without using gold passages.\nWe also note that some MSMARCO questions cannot be answered using Wikipedia alone. Here,\nRAG can rely on parametric knowledge to generate reasonable responses.",
+    "token_count": 205
+  },
+  {
+    "chunk_id": 23,
+    "section": "3.3 Jeopardy Question Generation",
+    "section_type": "SUBSECTION",
+    "page_num": 5,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "To evaluate RAG\u2019s generation abilities in a non-QA setting, we study open-domain question gen-\neration. Rather than use questions from standard open-domain QA tasks, which typically consist\nof short, simple questions, we propose the more demanding task of generating Jeopardy questions.\nJeopardy is an unusual format that consists of trying to guess an entity from a fact about that entity.\nFor example, \u201cThe World Cup\u201d is the answer to the question \u201cIn 1986 Mexico scored as the \ufb01rst\ncountry to host this international sports competition twice.\u201d As Jeopardy questions are precise,\nfactual statements, generating Jeopardy questions conditioned on their answer entities constitutes a\nchallenging knowledge-intensive generation task.\nWe use the splits from SearchQA [10], with 100K train, 14K dev, and 27K test examples. As\nthis is a new task, we train a BART model for comparison. Following [67], we evaluate using the\nSQuAD-tuned Q-BLEU-1 metric [42]. Q-BLEU is a variant of BLEU with a higher weight for\nmatching entities and has higher correlation with human judgment for question generation than\nstandard metrics. We also perform two human evaluations",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 24,
+    "section": "3.3 Jeopardy Question Generation",
+    "section_type": "SUBSECTION",
+    "page_num": 5,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": "uned Q-BLEU-1 metric [42]. Q-BLEU is a variant of BLEU with a higher weight for\nmatching entities and has higher correlation with human judgment for question generation than\nstandard metrics. We also perform two human evaluations, one to assess generation factuality, and\none for speci\ufb01city. We de\ufb01ne factuality as whether a statement can be corroborated by trusted external\nsources, and speci\ufb01city as high mutual dependence between the input and output [33]. We follow\nbest practice and use pairwise comparative evaluation [34]. Evaluators are shown an answer and two\ngenerated questions, one from BART and one from RAG. They are then asked to pick one of four\noptions\u2014quuestion A is better, question B is better, both are good, or neither is good.",
+    "token_count": 174
+  },
+  {
+    "chunk_id": 25,
+    "section": "3.4 Fact Veri\ufb01cation",
+    "section_type": "SUBSECTION",
+    "page_num": 5,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "FEVER [56] requires classifying whether a natural language claim is supported or refuted by\nWikipedia, or whether there is not enough information to decide. The task requires retrieving\nevidence from Wikipedia relating to the claim and then reasoning over this evidence to classify\nwhether the claim is true, false, or unveri\ufb01able from Wikipedia alone. FEVER is a retrieval problem\ncoupled with an challenging entailment reasoning task. It also provides an appropriate testbed for\nexploring the RAG models\u2019 ability to handle classi\ufb01cation rather than generation. We map FEVER\nclass labels (supports, refutes, or not enough info) to single output tokens and directly train with\nclaim-class pairs. Crucially, unlike most other approaches to FEVER, we do not use supervision on\nretrieved evidence. In many real-world applications, retrieval supervision signals aren\u2019t available, and\nmodels that do not require such supervision will be applicable to a wider range of tasks. We explore\ntwo variants: the standard 3-way classi\ufb01cation task (supports/refutes/not enough info) and the 2-way\n(supports/refutes) task studied in Thorne and Vlachos [57]. In",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 26,
+    "section": "3.4 Fact Veri\ufb01cation",
+    "section_type": "SUBSECTION",
+    "page_num": 5,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": " explore\ntwo variants: the standard 3-way classi\ufb01cation task (supports/refutes/not enough info) and the 2-way\n(supports/refutes) task studied in Thorne and Vlachos [57]. In both cases we report label accuracy.",
+    "token_count": 57
+  },
+  {
+    "chunk_id": 27,
+    "section": "4.1 Open-domain Question Answering",
+    "section_type": "SUBSECTION",
+    "page_num": 5,
+    "chunk_index": 0,
+    "total_chunks_in_section": 4,
+    "text": "Table 1 shows results for RAG along with state-of-the-art models. On all four open-domain QA\ntasks, RAG sets a new state of the art (only on the T5-comparable split for TQA). RAG combines\nthe generation \ufb02exibility of the \u201cclosed-book\u201d (parametric only) approaches and the performance of\n\"open-book\" retrieval-based approaches. Unlike REALM and T5+SSM, RAG enjoys strong results\nwithout expensive, specialized \u201csalient span masking\u201d pre-training [20]. It is worth noting that RAG\u2019s\nretriever is initialized using DPR\u2019s retriever, which uses retrieval supervision on Natural Questions\nand TriviaQA. RAG compares favourably to the DPR QA system, which uses a BERT-based \u201ccross-\nencoder\u201d to re-rank documents, along with an extractive reader. RAG demonstrates that neither a\nre-ranker nor extractive reader is necessary for state-of-the-art performance.\nThere are several advantages to generating answers even when it is possible to extract them. Docu-\nments with clues about the answer but do not contain the answer verbatim can still contribute towards\na correct answer being generated, which is not possible with standard extract",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 28,
+    "section": "4.1 Open-domain Question Answering",
+    "section_type": "SUBSECTION",
+    "page_num": 5,
+    "chunk_index": 1,
+    "total_chunks_in_section": 4,
+    "text": " are several advantages to generating answers even when it is possible to extract them. Docu-\nments with clues about the answer but do not contain the answer verbatim can still contribute towards\na correct answer being generated, which is not possible with standard extractive approaches, leading\n5\nTable 1: Open-Domain QA Test Scores. For TQA, Table 2: Generation and classi\ufb01cation Test Scores.\nleft column uses the standard test set for Open- MS-MARCO SotA is [4], FEVER-3 is [68] and\nDomain QA, right column uses the TQA-Wiki FEVER-2 is [57] *Uses gold context/evidence.\ntest set. See Appendix D for further details. Best model without gold access underlined.\nModel NQ TQA WQ CT\nModel Jeopardy MSMARCO FVR3 FVR2\nClosed T5-11B [52] 34.5 - /50.1 37.4 -\nB-1 QB-1 R-L B-1 Label Acc.\nBook T5-11B+SSM[52] 36.6 - /60.5 44.7 -\nSotA - - 49.8",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 29,
+    "section": "4.1 Open-domain Question Answering",
+    "section_type": "SUBSECTION",
+    "page_num": 5,
+    "chunk_index": 2,
+    "total_chunks_in_section": 4,
+    "text": " -\nB-1 QB-1 R-L B-1 Label Acc.\nBook T5-11B+SSM[52] 36.6 - /60.5 44.7 -\nSotA - - 49.8* 49.9* 76.8 92.2*\nOpen REALM [20] 40.4 - / - 40.7 46.8\nBook DPR [26] 41.5 57.9/ - 41.1 50.6 BART 15.1 19.7 38.2 41.6 64.0 81.1\nRAG-Token 44.1 55.2/66.1 45.5 50.0 RAG-Tok. 17.3 22.2 40.1 41.5\n72.5 89.5\nRAG-Seq. 44.5 56.8/68.0 45.2 52.2 RAG-Seq. 14.7 21.4 40.8 44.2\nto more effective marginalization over documents. Furthermore, RAG can generate correct answers\neven when",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 30,
+    "section": "4.1 Open-domain Question Answering",
+    "section_type": "SUBSECTION",
+    "page_num": 5,
+    "chunk_index": 3,
+    "total_chunks_in_section": 4,
+    "text": "0 45.2 52.2 RAG-Seq. 14.7 21.4 40.8 44.2\nto more effective marginalization over documents. Furthermore, RAG can generate correct answers\neven when the correct answer is not in any retrieved document, achieving 11.8% accuracy in such\ncases for NQ, where an extractive model would score 0%.",
+    "token_count": 85
+  },
+  {
+    "chunk_id": 31,
+    "section": "4.2 Abstractive Question Answering",
+    "section_type": "SUBSECTION",
+    "page_num": 6,
+    "chunk_index": 0,
+    "total_chunks_in_section": 1,
+    "text": "As shown in Table 2, RAG-Sequence outperforms BART on Open MS-MARCO NLG by 2.6 Bleu\npoints and 2.6 Rouge-L points. RAG approaches state-of-the-art model performance, which is\nimpressive given that (i) those models access gold passages with speci\ufb01c information required to\ngenerate the reference answer , (ii) many questions are unanswerable without the gold passages, and\n(iii) not all questions are answerable from Wikipedia alone. Table 3 shows some generated answers\nfrom our models. Qualitatively, we \ufb01nd that RAG models hallucinate less and generate factually\ncorrect text more often than BART. Later, we also show that RAG generations are more diverse than\nBART generations (see \u00a74.5).",
+    "token_count": 175
+  },
+  {
+    "chunk_id": 32,
+    "section": "4.3 Jeopardy Question Generation",
+    "section_type": "SUBSECTION",
+    "page_num": 6,
+    "chunk_index": 0,
+    "total_chunks_in_section": 3,
+    "text": "Table 2 shows that RAG-Token performs better than RAG-Sequence on Jeopardy question generation,\nwith both models outperforming BART on Q-BLEU-1. 4 shows human evaluation results, over 452\npairs of generations from BART and RAG-Token. Evaluators indicated that BART was more factual\nthan RAG in only 7.1% of cases, while RAG was more factual in 42.7% of cases, and both RAG and\nBART were factual in a further 17% of cases, clearly demonstrating the effectiveness of RAG on\nthe task over a state-of-the-art generation model. Evaluators also \ufb01nd RAG generations to be more\nspeci\ufb01c by a large margin. Table 3 shows typical generations from each model.\nJeopardy questions often contain two separate pieces of information, and RAG-Token may perform\nbest because it can generate responses that combine content from several documents. Figure 2 shows\nan example. When generating \u201cSun\u201d, the posterior is high for document 2 which mentions \u201cThe\nSun Also Rises\u201d. Similarly, document 1 dominates the posterior when \u201cA Farewell to Arms\u201d is\ngenerated. Intriguing",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 33,
+    "section": "4.3 Jeopardy Question Generation",
+    "section_type": "SUBSECTION",
+    "page_num": 6,
+    "chunk_index": 1,
+    "total_chunks_in_section": 3,
+    "text": "\nan example. When generating \u201cSun\u201d, the posterior is high for document 2 which mentions \u201cThe\nSun Also Rises\u201d. Similarly, document 1 dominates the posterior when \u201cA Farewell to Arms\u201d is\ngenerated. Intriguingly, after the \ufb01rst token of each book is generated, the document posterior \ufb02attens.\nThis observation suggests that the generator can complete the titles without depending on speci\ufb01c\ndocuments. In other words, the model\u2019s parametric knowledge is suf\ufb01cient to complete the titles. We\n\ufb01nd evidence for this hypothesis by feeding the BART-only baseline with the partial decoding \"The\nSun. BART completes the generation \"The Sun Also Rises\" is a novel by this author of \"The Sun\nAlso Rises\" indicating the title \"The Sun Also Rises\" is stored in BART\u2019s parameters. Similarly,\nBART will complete the partial decoding \"The Sun Also Rises\" is a novel by this author of \"A\nwith \"The Sun Also Rises\" is a novel by this author of \"A Farewell to Arms\". This example shows\nhow parametric and non-parametric memories work together\u2014the non-parametric component helps\nto guide the",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 34,
+    "section": "4.3 Jeopardy Question Generation",
+    "section_type": "SUBSECTION",
+    "page_num": 6,
+    "chunk_index": 2,
+    "total_chunks_in_section": 3,
+    "text": " of \"A\nwith \"The Sun Also Rises\" is a novel by this author of \"A Farewell to Arms\". This example shows\nhow parametric and non-parametric memories work together\u2014the non-parametric component helps\nto guide the generation, drawing out speci\ufb01c knowledge stored in the parametric memory.",
+    "token_count": 67
+  },
+  {
+    "chunk_id": 35,
+    "section": "4.4 Fact Veri\ufb01cation",
+    "section_type": "SUBSECTION",
+    "page_num": 6,
+    "chunk_index": 0,
+    "total_chunks_in_section": 4,
+    "text": "Table 2 shows our results on FEVER. For 3-way classi\ufb01cation, RAG scores are within 4.3% of\nstate-of-the-art models, which are complex pipeline systems with domain-speci\ufb01c architectures and\nsubstantial engineering, trained using intermediate retrieval supervision, which RAG does not require.\n6\nDocument1:hisworksareconsideredclassicsofAmerican Doc1\nliterature...Hiswartimeexperiencesformedthebasisforhisnovel Doc2\n\u201dAFarewelltoArms\u201d(1929)...\nDoc3\nDocument2:...artistsofthe1920s\u201dLostGeneration\u201dexpatriate\nDoc4\ncommunity.Hisdebutnovel,\u201dTheSunAlsoRises\u201d,waspublished\nin1926. Doc5\nS\u201d e n oR es\u201disa ely is orof\u201dA ello ms\u201d\nO hu s s vb h aret\nB TSAl i o t h F w r\nn ut A\na\nFigure 2: RAG-Token document posterior p(z |x,y ,y ) for each generated token for input \u201cHem-\ni i \u2212i\ningway\" for Jeopardy generation with 5",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 36,
+    "section": "4.4 Fact Veri\ufb01cation",
+    "section_type": "SUBSECTION",
+    "page_num": 6,
+    "chunk_index": 1,
+    "total_chunks_in_section": 4,
+    "text": "\nn ut A\na\nFigure 2: RAG-Token document posterior p(z |x,y ,y ) for each generated token for input \u201cHem-\ni i \u2212i\ningway\" for Jeopardy generation with 5 retrieved documents. The posterior for document 1 is high\nwhen generating \u201cA Farewell to Arms\" and for document 2 when generating \u201cThe Sun Also Rises\".\nTable 3: Examples from generation tasks. RAG models generate more speci\ufb01c and factually accurate\nresponses. \u2018?\u2019 indicates factually incorrect responses, * indicates partially correct responses.\nTask Input Model Generation\nBART ?Themiddleearisthepartoftheearbetweenthemiddleearandthenose.\nde\ufb01nemiddle\nRAG-T Themiddleearistheportionoftheearinternaltotheeardrum.\near\nMS- RAG-S Themiddleearincludesthetympaniccavityandthethreeossicles.\nMARCO\nwhatcurrency BART ThecurrencyneededinScotlandisPoundsterling.\nneededin RAG-T PoundisthecurrencyneededinScotland.\nscotland RAG-S ThecurrencyneededinScotlandisthepoundsterling.\nBART ?Thisstateh",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 37,
+    "section": "4.4 Fact Veri\ufb01cation",
+    "section_type": "SUBSECTION",
+    "page_num": 6,
+    "chunk_index": 2,
+    "total_chunks_in_section": 4,
+    "text": "currency BART ThecurrencyneededinScotlandisPoundsterling.\nneededin RAG-T PoundisthecurrencyneededinScotland.\nscotland RAG-S ThecurrencyneededinScotlandisthepoundsterling.\nBART ?ThisstatehasthelargestnumberofcountiesintheU.S.\nJeopardy Washington RAG-T It\u2019stheonlyU.S.statenamedforaU.S.president\nQuestion RAG-S It\u2019sthestatewhereyou\u2019ll\ufb01ndMountRainierNationalPark\nGener\nBART *ThisepicpoembyDanteisdividedinto3parts: theInferno,thePurgatorio&thePurgatorio\n-ation TheDivine\nRAG-T Dante\u2019s\"Inferno\"isthe\ufb01rstpartofthisepicpoem\nComedy\nRAG-S This14thcenturyworkisdividedinto3sections: \"Inferno\",\"Purgatorio\"&\"Paradiso\"\nFor 2-way classi\ufb01cation, we compare against Thorne and Vlachos [57], who train RoBERTa [35]\nto classify the claim as true or false given the gold evidence sentence. RAG achieves an accuracy\nwithin 2",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 38,
+    "section": "4.4 Fact Veri\ufb01cation",
+    "section_type": "SUBSECTION",
+    "page_num": 6,
+    "chunk_index": 3,
+    "total_chunks_in_section": 4,
+    "text": " classi\ufb01cation, we compare against Thorne and Vlachos [57], who train RoBERTa [35]\nto classify the claim as true or false given the gold evidence sentence. RAG achieves an accuracy\nwithin 2.7% of this model, despite being supplied with only the claim and retrieving its own evidence.\nWe also analyze whether documents retrieved by RAG correspond to documents annotated as gold\nevidence in FEVER. We calculate the overlap in article titles between the top k documents retrieved\nby RAG and gold evidence annotations. We \ufb01nd that the top retrieved document is from a gold article\nin 71% of cases, and a gold article is present in the top 10 retrieved articles in 90% of cases.",
+    "token_count": 156
+  },
+  {
+    "chunk_id": 39,
+    "section": "4.5 Additional Results",
+    "section_type": "SUBSECTION",
+    "page_num": 7,
+    "chunk_index": 0,
+    "total_chunks_in_section": 7,
+    "text": "Generation Diversity Section 4.3 shows that RAG models are more factual and speci\ufb01c than\nBART for Jeopardy question generation. Following recent work on diversity-promoting decoding\n[33, 59, 39], we also investigate generation diversity by calculating the ratio of distinct ngrams to\ntotal ngrams generated by different models. Table 5 shows that RAG-Sequence\u2019s generations are\nmore diverse than RAG-Token\u2019s, and both are signi\ufb01cantly more diverse than BART without needing\nany diversity-promoting decoding.\nRetrieval Ablations A key feature of RAG is learning to retrieve relevant information for the task.\nTo assess the effectiveness of the retrieval mechanism, we run ablations where we freeze the retriever\nduring training. As shown in Table 6, learned retrieval improves results for all tasks.\nWe compare RAG\u2019s dense retriever to a word overlap-based BM25 retriever [53]. Here, we replace\nRAG\u2019s retriever with a \ufb01xed BM25 system, and use BM25 retrieval scores as logits when calculating\np(z|x). Table 6 shows the results. For FEVER, BM25 performs best, perhaps since FEVER claims are\nheav",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 40,
+    "section": "4.5 Additional Results",
+    "section_type": "SUBSECTION",
+    "page_num": 7,
+    "chunk_index": 1,
+    "total_chunks_in_section": 7,
+    "text": "ver with a \ufb01xed BM25 system, and use BM25 retrieval scores as logits when calculating\np(z|x). Table 6 shows the results. For FEVER, BM25 performs best, perhaps since FEVER claims are\nheavily entity-centric and thus well-suited for word overlap-based retrieval. Differentiable retrieval\nimproves results on all other tasks, especially for Open-Domain QA, where it is crucial.\nIndex hot-swapping An advantage of non-parametric memory models like RAG is that knowledge\ncan be easily updated at test time. Parametric-only models like T5 or BART need further training to\nupdate their behavior as the world changes. To demonstrate, we build an index using the DrQA [5]\nWikipedia dump from December 2016 and compare outputs from RAG using this index to the newer\nindex from our main results (December 2018). We prepare a list of 82 world leaders who had changed\n7\nTable 4: Human assessments for the Jeopardy Table 5: Ratio of distinct to total tri-grams for\nQuestion Generation Task. generation tasks.\nFactuality Speci\ufb01city\nMSMARCO Jeopardy QGen\nBART better 7.1",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 41,
+    "section": "4.5 Additional Results",
+    "section_type": "SUBSECTION",
+    "page_num": 7,
+    "chunk_index": 2,
+    "total_chunks_in_section": 7,
+    "text": " for the Jeopardy Table 5: Ratio of distinct to total tri-grams for\nQuestion Generation Task. generation tasks.\nFactuality Speci\ufb01city\nMSMARCO Jeopardy QGen\nBART better 7.1% 16.8%\nGold 89.6% 90.0%\nRAG better 42.7% 37.4%\nBART 70.7% 32.4%\nBoth good 11.7% 11.8%\nRAG-Token 77.8% 46.8%\nBoth poor 17.7% 6.9%\nRAG-Seq. 83.5% 53.8%\nNo majority 20.8% 20.1%\nTable 6: Ablations on the dev set. As FEVER is a classi\ufb01cation task, both RAG models are equivalent.\nModel NQ TQA WQ CT Jeopardy-QGen MSMarco FVR-3 FVR-2\nExact Match B-1 QB-1 R-L B-1 Label Accuracy\nRAG-Token-BM25 29.7 41.5 32.1 33.1 17.5 22",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 42,
+    "section": "4.5 Additional Results",
+    "section_type": "SUBSECTION",
+    "page_num": 7,
+    "chunk_index": 3,
+    "total_chunks_in_section": 7,
+    "text": "3 FVR-2\nExact Match B-1 QB-1 R-L B-1 Label Accuracy\nRAG-Token-BM25 29.7 41.5 32.1 33.1 17.5 22.3 55.5 48.4\n75.1 91.6\nRAG-Sequence-BM25 31.8 44.1 36.6 33.8 11.1 19.5 56.5 46.9\nRAG-Token-Frozen 37.8 50.1 37.1 51.1 16.7 21.7 55.9 49.4\n72.9 89.4\nRAG-Sequence-Frozen 41.2 52.1 41.8 52.6 11.8 19.6 56.7 47.3\nRAG-Token 43.5 54.8 46.5 51.9 17.9 22.6 56.2 49.4\n74.5 90.6\nRAG-Sequence 44.0 55.8 44.9 53",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 43,
+    "section": "4.5 Additional Results",
+    "section_type": "SUBSECTION",
+    "page_num": 7,
+    "chunk_index": 4,
+    "total_chunks_in_section": 7,
+    "text": "46.5 51.9 17.9 22.6 56.2 49.4\n74.5 90.6\nRAG-Sequence 44.0 55.8 44.9 53.4 15.3 21.5 57.2 47.5\nbetween these dates and use a template \u201cWho is {position}?\u201d (e.g. \u201cWho is the President of Peru?\u201d)\nto query our NQ RAG model with each index. RAG answers 70% correctly using the 2016 index for\n2016 world leaders and 68% using the 2018 index for 2018 world leaders. Accuracy with mismatched\nindices is low (12% with the 2018 index and 2016 leaders, 4% with the 2016 index and 2018 leaders).\nThis shows we can update RAG\u2019s world knowledge by simply replacing its non-parametric memory.\nEffect of Retrieving more documents Models are trained with either 5 or 10 retrieved latent\ndocuments, and we do not observe signi\ufb01cant differences in performance between them. We have the\n\ufb02exibility to adjust the number of retrieved documents at test",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 44,
+    "section": "4.5 Additional Results",
+    "section_type": "SUBSECTION",
+    "page_num": 7,
+    "chunk_index": 5,
+    "total_chunks_in_section": 7,
+    "text": " documents Models are trained with either 5 or 10 retrieved latent\ndocuments, and we do not observe signi\ufb01cant differences in performance between them. We have the\n\ufb02exibility to adjust the number of retrieved documents at test time, which can affect performance and\nruntime. Figure 3 (left) shows that retrieving more documents at test time monotonically improves\nOpen-domain QA results for RAG-Sequence, but performance peaks for RAG-Token at 10 retrieved\ndocuments. Figure 3 (right) shows that retrieving more documents leads to higher Rouge-L for\nRAG-Token at the expense of Bleu-1, but the effect is less pronounced for RAG-Sequence.\n44 80\n56\n43\n70\n54 RAG-TokR-L\n42 RAG-TokB-1\n60\n52 RAG-SeqR-L\n41 RAG-Tok\nRAG-SeqB-1\n50 RAG-Seq\n40 50\nRAG-Tok FixedDPR\nRAG-Seq 40 BM25 48\n39\n10 20 30 40 50 10 20 30 40 50 10 20 30 40 50",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 45,
+    "section": "4.5 Additional Results",
+    "section_type": "SUBSECTION",
+    "page_num": 7,
+    "chunk_index": 6,
+    "total_chunks_in_section": 7,
+    "text": "RAG-Tok FixedDPR\nRAG-Seq 40 BM25 48\n39\n10 20 30 40 50 10 20 30 40 50 10 20 30 40 50\nKRetrievedDocs KRetrievedDocs KRetrievedDocs\nFigure 3: Left: NQ performance as more documents are retrieved. Center: Retrieval recall perfor-\nmance in NQ. Right: MS-MARCO Bleu-1 and Rouge-L as more documents are retrieved.",
+    "token_count": 111
+  },
+  {
+    "chunk_id": 46,
+    "section": "5 Related Work",
+    "section_type": "SECTION",
+    "page_num": 8,
+    "chunk_index": 0,
+    "total_chunks_in_section": 4,
+    "text": "Single-Task Retrieval Prior work has shown that retrieval improves performance across a variety of\nNLP tasks when considered in isolation. Such tasks include open-domain question answering [5, 29],\nfact checking [56], fact completion [48], long-form question answering [12], Wikipedia article\ngeneration [36], dialogue [41, 65, 9, 13], translation [17], and language modeling [19, 27]. Our\nwork uni\ufb01es previous successes in incorporating retrieval into individual tasks, showing that a single\nretrieval-based architecture is capable of achieving strong performance across several tasks.\n8\nGeneral-Purpose Architectures for NLP Prior work on general-purpose architectures for NLP\ntasks has shown great success without the use of retrieval. A single, pre-trained language model\nhas been shown to achieve strong performance on various classi\ufb01cation tasks in the GLUE bench-\nmarks [60, 61] after \ufb01ne-tuning [49, 8]. GPT-2 [50] later showed that a single, left-to-right, pre-trained\nlanguage model could achieve strong performance across both discriminative and generative tasks.\nFor further improvement, BART [32] and T5 [51, 52",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 47,
+    "section": "5 Related Work",
+    "section_type": "SECTION",
+    "page_num": 8,
+    "chunk_index": 1,
+    "total_chunks_in_section": 4,
+    "text": "-2 [50] later showed that a single, left-to-right, pre-trained\nlanguage model could achieve strong performance across both discriminative and generative tasks.\nFor further improvement, BART [32] and T5 [51, 52] propose a single, pre-trained encoder-decoder\nmodel that leverages bi-directional attention to achieve stronger performance on discriminative\nand generative tasks. Our work aims to expand the space of possible tasks with a single, uni\ufb01ed\narchitecture, by learning a retrieval module to augment pre-trained, generative language models.\nLearned Retrieval There is signi\ufb01cant work on learning to retrieve documents in information\nretrieval, more recently with pre-trained, neural language models [44, 26] similar to ours. Some\nwork optimizes the retrieval module to aid in a speci\ufb01c, downstream task such as question answering,\nusing search [46], reinforcement learning [6, 63, 62], or a latent variable approach [31, 20] as in our\nwork. These successes leverage different retrieval-based architectures and optimization techniques to\nachieve strong performance on a single task, while we show that a single retrieval-based architecture\ncan be \ufb01ne-t",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 48,
+    "section": "5 Related Work",
+    "section_type": "SECTION",
+    "page_num": 8,
+    "chunk_index": 2,
+    "total_chunks_in_section": 4,
+    "text": " approach [31, 20] as in our\nwork. These successes leverage different retrieval-based architectures and optimization techniques to\nachieve strong performance on a single task, while we show that a single retrieval-based architecture\ncan be \ufb01ne-tuned for strong performance on a variety of tasks.\nMemory-based Architectures Our document index can be seen as a large external memory for\nneural networks to attend to, analogous to memory networks [64, 55]. Concurrent work [14] learns\nto retrieve a trained embedding for each entity in the input, rather than to retrieve raw text as in our\nwork. Other work improves the ability of dialog models to generate factual text by attending over\nfact embeddings [15, 13]. A key feature of our memory is that it is comprised of raw text rather\ndistributed representations, which makes the memory both (i) human-readable, lending a form of\ninterpretability to our model, and (ii) human-writable, enabling us to dynamically update the model\u2019s\nmemory by editing the document index. This approach has also been used in knowledge-intensive\ndialog, where generators have been conditioned on retrieved text directly, albeit obtained via TF-IDF\nrather than end-to-end learnt retrieval [9].\nRetrieve-and-",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 49,
+    "section": "5 Related Work",
+    "section_type": "SECTION",
+    "page_num": 8,
+    "chunk_index": 3,
+    "total_chunks_in_section": 4,
+    "text": "\nmemory by editing the document index. This approach has also been used in knowledge-intensive\ndialog, where generators have been conditioned on retrieved text directly, albeit obtained via TF-IDF\nrather than end-to-end learnt retrieval [9].\nRetrieve-and-Edit approaches Our method shares some similarities with retrieve-and-edit style\napproaches, where a similar training input-output pair is retrieved for a given input, and then edited\nto provide a \ufb01nal output. These approaches have proved successful in a number of domains including\nMachine Translation [18, 22] and Semantic Parsing [21]. Our approach does have several differences,\nincluding less of emphasis on lightly editing a retrieved item, but on aggregating content from several\npieces of retrieved content, as well as learning latent retrieval, and retrieving evidence documents\nrather than related training pairs. This said, RAG techniques may work well in these settings, and\ncould represent promising future work.",
+    "token_count": 188
+  },
+  {
+    "chunk_id": 50,
+    "section": "6 Discussion",
+    "section_type": "SECTION",
+    "page_num": 9,
+    "chunk_index": 0,
+    "total_chunks_in_section": 1,
+    "text": "In this work, we presented hybrid generation models with access to parametric and non-parametric\nmemory. We showed that our RAG models obtain state of the art results on open-domain QA. We\nfound that people prefer RAG\u2019s generation over purely parametric BART, \ufb01nding RAG more factual\nand speci\ufb01c. We conducted an thorough investigation of the learned retrieval component, validating\nits effectiveness, and we illustrated how the retrieval index can be hot-swapped to update the model\nwithout requiring any retraining. In future work, it may be fruitful to investigate if the two components\ncan be jointly pre-trained from scratch, either with a denoising objective similar to BART or some\nanother objective. Our work opens up new research directions on how parametric and non-parametric\nmemories interact and how to most effectively combine them, showing promise in being applied to a\nwide variety of NLP tasks.\n9",
+    "token_count": 194
+  },
+  {
+    "chunk_id": 51,
+    "section": "Broader Impact",
+    "section_type": "SECTION",
+    "page_num": 10,
+    "chunk_index": 0,
+    "total_chunks_in_section": 2,
+    "text": "This work offers several positive societal bene\ufb01ts over previous work: the fact that it is more\nstrongly grounded in real factual knowledge (in this case Wikipedia) makes it \u201challucinate\u201d less\nwith generations that are more factual, and offers more control and interpretability. RAG could be\nemployed in a wide variety of scenarios with direct bene\ufb01t to society, for example by endowing it\nwith a medical index and asking it open-domain questions on that topic, or by helping people be more\neffective at their jobs.\nWith these advantages also come potential downsides: Wikipedia, or any potential external knowledge\nsource, will probably never be entirely factual and completely devoid of bias. Since RAG can be\nemployed as a language model, similar concerns as for GPT-2 [50] are valid here, although arguably\nto a lesser extent, including that it might be used to generate abuse, faked or misleading content in\nthe news or on social media; to impersonate others; or to automate the production of spam/phishing\ncontent [54]. Advanced language models may also lead to the automation of various jobs in the\ncoming decades [16]. In order to mitigate these risks, AI systems could be employed to \ufb01",
+    "token_count": 256
+  },
+  {
+    "chunk_id": 52,
+    "section": "Broader Impact",
+    "section_type": "SECTION",
+    "page_num": 10,
+    "chunk_index": 1,
+    "total_chunks_in_section": 2,
+    "text": "; or to automate the production of spam/phishing\ncontent [54]. Advanced language models may also lead to the automation of various jobs in the\ncoming decades [16]. In order to mitigate these risks, AI systems could be employed to \ufb01ght against\nmisleading content and automated spam/phishing.",
+    "token_count": 62
+  },
+  {
+    "chunk_id": 53,
+    "section": "Acknowledgments",
+    "section_type": "SECTION",
+    "page_num": 10,
+    "chunk_index": 0,
+    "total_chunks_in_section": 1,
+    "text": "The authors would like to thank the reviewers for their thoughtful and constructive feedback on this\npaper, as well as HuggingFace for their help in open-sourcing code to run RAG models. The authors\nwould also like to thank Kyunghyun Cho and Sewon Min for productive discussions and advice. EP\nthanks supports from the NSF Graduate Research Fellowship. PL is supported by the FAIR PhD\nprogram.",
+    "token_count": 84
+  }
+]
