@@ -87,15 +87,17 @@ def answer_query(query: str, paper_name: str) -> dict:
             if confidence > best_confidence:
                 best_confidence = confidence
                 best_result = {
-                    "query":        query,
-                    "answer":       answer,
-                    "confidence":   confidence,
-                    "attempts":     attempt,
-                    "passed":       confidence >= CONFIDENCE_THRESHOLD,
-                    "warning":      None,
-                    "failure_type": None,
-                    "sources":      sources,
-                    "query_used":   query_used,
+                    "query":            query,
+                    "answer":           answer,
+                    "confidence":       confidence,
+                    "faithfulness":     eval_scores["faithfulness"],
+                    "answer_relevancy": eval_scores["answer_relevancy"],
+                    "attempts":         attempt,
+                    "passed":           confidence >= CONFIDENCE_THRESHOLD,
+                    "warning":          None,
+                    "failure_type":     None,
+                    "sources":          sources,
+                    "query_used":       query_used,
                 }
 
             if confidence >= CONFIDENCE_THRESHOLD and not out_of_domain:
@@ -111,15 +113,17 @@ def answer_query(query: str, paper_name: str) -> dict:
     # ── Graceful degradation ──────────────────────────────────────────────────
     if best_result is None:
         best_result = {
-            "query":        query,
-            "answer":       "Unable to answer this question from the provided paper.",
-            "confidence":   0.0,
-            "attempts":     MAX_ATTEMPTS,
-            "passed":       False,
-            "warning":      "All pipeline attempts failed with errors.",
-            "failure_type": "retrieval",
-            "sources":      [],
-            "query_used":   query,
+            "query":            query,
+            "answer":           "Unable to answer this question from the provided paper.",
+            "confidence":       0.0,
+            "faithfulness":     0.0,
+            "answer_relevancy": 0.0,
+            "attempts":         MAX_ATTEMPTS,
+            "passed":           False,
+            "warning":          "All pipeline attempts failed with errors.",
+            "failure_type":     "retrieval",
+            "sources":          [],
+            "query_used":       query,
         }
     else:
         if out_of_domain:

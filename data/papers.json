@@ -46,5 +46,37 @@
     "uploaded_at": "2026-05-02T10:23:41.237460",
     "completed_at": "2026-05-02T10:24:20.360971",
     "error": null
+  },
+  "15099f2e-c38c-455d-a4b1-a8357b3d284b": {
+    "paper_id": "15099f2e-c38c-455d-a4b1-a8357b3d284b",
+    "filename": "Language Models are Few-Shot Learners.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-02T18:29:19.334912",
+    "completed_at": "2026-05-02T18:30:26.312543",
+    "error": null
+  },
+  "acaabf2e-4d8e-48eb-82a9-8efcbc4b49b4": {
+    "paper_id": "acaabf2e-4d8e-48eb-82a9-8efcbc4b49b4",
+    "filename": "Chain-of-Thought Prompting Elicits Reasoning.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-02T18:35:29.791975",
+    "completed_at": "2026-05-02T18:36:43.511976",
+    "error": null
+  },
+  "9e933c6a-e8bb-4c1e-b769-418c9f7835a5": {
+    "paper_id": "9e933c6a-e8bb-4c1e-b769-418c9f7835a5",
+    "filename": "Retrieval-Augmented Generation for.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-02T18:44:52.565469",
+    "completed_at": "2026-05-02T18:45:33.543414",
+    "error": null
+  },
+  "90326e90-e073-4dd8-ba97-bf1821215394": {
+    "paper_id": "90326e90-e073-4dd8-ba97-bf1821215394",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-02T19:06:26.819809",
+    "completed_at": "2026-05-02T19:07:44.313440",
+    "error": null
   }
 }

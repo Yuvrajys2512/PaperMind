@@ -1,21 +1,22 @@
 import { useState, useRef, useEffect } from 'react'
 import { queryPaper, listPapers } from '../api'
 
-function ConfidenceBar({ score }) {
-  const color = score >= 70 ? 'bg-cyan-400' : score >= 40 ? 'bg-blue-500' : 'bg-red-500'
-  const glow = score >= 70 ? 'shadow-[0_0_10px_rgba(34,211,238,0.4)]' : ''
+function MetricItem({ label, value, color, isPercentage = false }) {
+  const percent = isPercentage ? value : value * 100
+  const displayValue = isPercentage ? value.toFixed(1) + '%' : value.toFixed(2)
   
   return (
-    <div className="flex items-center gap-3 mt-4">
-      <div className="flex-1 bg-white/5 rounded-full h-1.5 overflow-hidden">
+    <div className="flex flex-col gap-1.5 flex-1">
+      <div className="flex justify-between items-center px-0.5">
+        <span className="text-[8px] uppercase tracking-[0.2em] text-gray-500 font-bold">{label}</span>
+        <span className={`text-[9px] font-mono font-bold ${color}`}>{displayValue}</span>
+      </div>
+      <div className="bg-white/5 rounded-full h-1 overflow-hidden">
         <div 
-          className={`${color} ${glow} h-1.5 rounded-full transition-all duration-1000 ease-out`} 
-          style={{ width: `${score}%` }} 
+          className={`${color.replace('text-', 'bg-')} h-full rounded-full transition-all duration-1000 ease-out shadow-[0_0_8px_rgba(0,0,0,0.5)]`} 
+          style={{ width: `${percent}%` }} 
         />
       </div>
-      <span className="text-[10px] font-medium text-gray-500 w-16 uppercase tracking-wider">
-        {score.toFixed(1)}% Match
-      </span>
     </div>
   )
 }
@@ -40,14 +41,18 @@ function Message({ msg }) {
     )
   }
 
-  const { answer, confidence, sources, attempts, warning } = msg.content
+  const { answer, confidence, faithfulness, answer_relevancy, sources, attempts, warning } = msg.content
   return (
     <div className="flex justify-start mb-8 group">
       <div className="max-w-3xl w-full">
         <div className="glass-dark rounded-3xl rounded-tl-sm px-7 py-6 border-white/5 group-hover:border-blue-500/20 transition-all duration-300 shadow-2xl">
           <p className="text-gray-200 text-sm leading-loose whitespace-pre-wrap">{answer}</p>
           
-          <ConfidenceBar score={confidence} />
+          <div className="grid grid-cols-3 gap-6 mt-6 pt-5 border-t border-white/5">
+            <MetricItem label="Confidence" value={confidence} color="text-cyan-400" isPercentage={true} />
+            <MetricItem label="Faithfulness" value={faithfulness || 0} color="text-blue-500" />
+            <MetricItem label="Relevancy" value={answer_relevancy || 0} color="text-indigo-400" />
+          </div>
           
           {sources && sources.length > 0 && (
             <div className="mt-6 pt-5 border-t border-white/5">
@@ -129,7 +134,15 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
         ...prev,
         [paperId]: [...(prev[paperId] || []), {
           role: 'assistant',
-          content: { answer: 'Neural link interrupted. Please attempt query again.', confidence: 0, sources: [], attempts: 1, warning: null }
+          content: { 
+            answer: 'Neural link interrupted. Please attempt query again.', 
+            confidence: 0, 
+            faithfulness: 0,
+            answer_relevancy: 0,
+            sources: [], 
+            attempts: 1, 
+            warning: null 
+          }
         }]
       }))
     } finally {

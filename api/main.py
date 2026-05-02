@@ -104,3 +104,5 @@ def query_paper(request: QueryRequest):
 
     result = answer_query(request.question, request.paper_id)
     return result
+
+ 
