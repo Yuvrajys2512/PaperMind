@@ -1,1 +1,78 @@
 @import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Outfit', system-ui, sans-serif;
+  
+  --color-brand-blue: #0070f3;
+  --color-brand-cyan: #00dfd8;
+  --color-brand-purple: #7928ca;
+}
+
+@layer base {
+  body {
+    @apply bg-black text-gray-100 antialiased;
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+  }
+}
+
+@layer components {
+  .glass {
+    @apply backdrop-blur-xl bg-white/5 border border-white/10;
+  }
+  
+  .glass-dark {
+    @apply backdrop-blur-2xl bg-black/40 border border-white/5;
+  }
+
+  .cosmic-bg {
+    background: radial-gradient(circle at 50% -20%, #1a1a2e 0%, #000000 80%);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cosmic-bg::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: 
+      radial-gradient(white, rgba(255,255,255,.2) 2px, transparent 40px),
+      radial-gradient(white, rgba(255,255,255,.15) 1px, transparent 30px),
+      radial-gradient(white, rgba(255,255,255,.1) 2px, transparent 40px);
+    background-size: 550px 550px, 350px 350px, 250px 250px;
+    background-position: 0 0, 40px 60px, 130px 270px;
+    opacity: 0.15;
+    animation: stars 120s linear infinite;
+  }
+
+  .neon-glow {
+    box-shadow: 0 0 30px rgba(0, 112, 243, 0.4);
+  }
+
+  .text-glow {
+    text-shadow: 0 0 15px rgba(0, 223, 216, 0.4);
+  }
+}
+
+@keyframes stars {
+  from { background-position: 0 0, 40px 60px, 130px 270px; }
+  to { background-position: 550px 550px, 390px 410px, 380px 820px; }
+}
+
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}

@@ -30,5 +30,13 @@
     "uploaded_at": "2026-05-02T09:54:04.942395",
     "completed_at": "2026-05-02T09:54:39.480012",
     "error": null
+  },
+  "cb768902-5012-4f36-85e8-83eb20c939b8": {
+    "paper_id": "cb768902-5012-4f36-85e8-83eb20c939b8",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-02T10:16:17.089958",
+    "completed_at": "2026-05-02T10:16:59.781838",
+    "error": null
   }
 }
