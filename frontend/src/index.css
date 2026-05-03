@@ -76,3 +76,27 @@
 .animate-float {
   animation: float 6s ease-in-out infinite;
 }
+
+.accordion-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease;
+  opacity: 0;
+}
+
+.accordion-content.expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.accordion-inner {
+  overflow: hidden;
+}
+
+.markdown-content p {
+  margin-bottom: 1em;
+}
+
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}

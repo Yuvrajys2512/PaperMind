@@ -78,5 +78,29 @@
     "uploaded_at": "2026-05-02T19:06:26.819809",
     "completed_at": "2026-05-02T19:07:44.313440",
     "error": null
+  },
+  "c3ef7a13-e675-4478-9a8e-c4503d9b44da": {
+    "paper_id": "c3ef7a13-e675-4478-9a8e-c4503d9b44da",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-03T19:28:49.641631",
+    "completed_at": "2026-05-03T19:29:27.882701",
+    "error": null
+  },
+  "14857b86-9a0a-49fc-88ff-34f3f25c15da": {
+    "paper_id": "14857b86-9a0a-49fc-88ff-34f3f25c15da",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-03T19:44:31.019407",
+    "completed_at": "2026-05-03T19:44:55.748839",
+    "error": null
+  },
+  "b1463f9e-44e8-4386-b2d9-023d08fcb68d": {
+    "paper_id": "b1463f9e-44e8-4386-b2d9-023d08fcb68d",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-03T20:05:12.481519",
+    "completed_at": "2026-05-03T20:06:01.858168",
+    "error": null
   }
 }

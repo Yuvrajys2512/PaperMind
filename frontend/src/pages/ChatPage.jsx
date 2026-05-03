@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { queryPaper, listPapers } from '../api'
+import ReactMarkdown from 'react-markdown'
 
 function MetricItem({ label, value, color, isPercentage = false }) {
   const percent = isPercentage ? value : value * 100
@@ -31,6 +32,8 @@ function SourceChip({ source }) {
 }
 
 function Message({ msg }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end mb-8">
@@ -42,13 +45,77 @@ function Message({ msg }) {
   }
 
   const { answer, confidence, faithfulness, answer_relevancy, sources, attempts, warning } = msg.content
+
+  // Parsing logic to split ESSENCE and DETAIL
+  const parseAnswer = (text) => {
+    if (!text) return { essence: '', detail: '' };
+    const detailMarker = "**DETAIL:**"
+    const essenceMarker = "**ESSENCE:**"
+    
+    let essence = text;
+    let detail = "";
+    
+    if (text.includes(detailMarker)) {
+      const parts = text.split(detailMarker)
+      essence = parts[0].replace(essenceMarker, "").trim()
+      detail = parts[1].trim()
+    } else {
+      essence = text.replace(essenceMarker, "").trim()
+    }
+    return { essence, detail }
+  }
+
+  const { essence, detail } = parseAnswer(answer)
+
   return (
     <div className="flex justify-start mb-8 group">
       <div className="max-w-3xl w-full">
         <div className="glass-dark rounded-3xl rounded-tl-sm px-7 py-6 border-white/5 group-hover:border-blue-500/20 transition-all duration-300 shadow-2xl">
-          <p className="text-gray-200 text-sm leading-loose whitespace-pre-wrap">{answer}</p>
           
-          <div className="grid grid-cols-3 gap-6 mt-6 pt-5 border-t border-white/5">
+          {/* Answer Content */}
+          <div className="space-y-4">
+            {/* Essence Section */}
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+              <span className="text-[10px] uppercase tracking-[0.2em] text-cyan-400/70 font-bold">The Essence</span>
+            </div>
+            <div className="text-gray-200 text-sm leading-relaxed markdown-content">
+              <ReactMarkdown>{essence}</ReactMarkdown>
+            </div>
+
+            {/* Detail Accordion */}
+            {detail && (
+              <div className="mt-6">
+                <button 
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-blue-400 hover:text-blue-300 transition-colors group/btn"
+                >
+                  <span className="bg-blue-500/10 px-2 py-1 rounded-lg group-hover/btn:bg-blue-500/20 transition-all">
+                    {isExpanded ? 'Hide Technical Detail' : 'View Full Breakdown'}
+                  </span>
+                  <svg className={`w-3.5 h-3.5 transition-transform duration-500 ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                
+                <div className={`accordion-content ${isExpanded ? 'expanded' : ''}`}>
+                  <div className="accordion-inner">
+                    <div className="pt-6 mt-4 border-t border-white/5">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                        <span className="text-[10px] uppercase tracking-[0.2em] text-blue-500/70 font-bold">Detailed Analysis</span>
+                      </div>
+                      <div className="text-gray-400 text-sm leading-loose markdown-content">
+                        <ReactMarkdown>{detail}</ReactMarkdown>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <div className="grid grid-cols-3 gap-6 mt-8 pt-6 border-t border-white/5">
             <MetricItem label="Confidence" value={confidence} color="text-cyan-400" isPercentage={true} />
             <MetricItem label="Faithfulness" value={faithfulness || 0} color="text-blue-500" />
             <MetricItem label="Relevancy" value={answer_relevancy || 0} color="text-indigo-400" />

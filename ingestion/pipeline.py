@@ -84,6 +84,15 @@ def answer_query(query: str, paper_name: str) -> dict:
                       f"(relevancy={eval_scores['answer_relevancy']:.3f} < {_OUT_OF_DOMAIN_RELEVANCY}). "
                       f"Skipping retries.")
 
+            # Deduplicate sources by (section, page)
+            seen = set()
+            deduped_sources = []
+            for s in sources:
+                key = (s["section"], s["page"])
+                if key not in seen:
+                    seen.add(key)
+                    deduped_sources.append(s)
+
             if confidence > best_confidence:
                 best_confidence = confidence
                 best_result = {
@@ -96,7 +105,7 @@ def answer_query(query: str, paper_name: str) -> dict:
                     "passed":           confidence >= CONFIDENCE_THRESHOLD,
                     "warning":          None,
                     "failure_type":     None,
-                    "sources":          sources,
+                    "sources":          deduped_sources,
                     "query_used":       query_used,
                 }
 

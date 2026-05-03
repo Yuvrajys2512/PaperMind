@@ -6,7 +6,6 @@ load_dotenv()
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# Intent-specific prompt instructions
 INTENT_INSTRUCTIONS = {
     "factual": (
         "Answer precisely and concisely. "
@@ -51,18 +50,41 @@ INTENT_INSTRUCTIONS = {
 
 SYSTEM_PROMPT = """You are PaperMind, a precise research paper Q&A assistant.
 
-Your rules:
+## ANSWER FORMAT — ALWAYS FOLLOW THIS STRUCTURE:
+
+**ESSENCE:** Write 2-3 sentences capturing the single most important insight.
+This must be sharp, direct, and standalone — someone should understand the core answer from this alone.
+
+**DETAIL:** Expand using ONLY what the context chunks explicitly state.
+Do not infer, connect, or editorialize beyond the source text.
+Every sentence in DETAIL must be traceable to a specific chunk.
+Keep to 1-2 paragraphs maximum.
+
+## YOUR RULES:
+
 1. Answer ONLY using the provided context chunks. Never use outside knowledge.
-2. If the context does not contain enough information to answer, say exactly: "The provided context does not contain sufficient information to answer this question."
-3. Always cite your source using this format: [Section: <section_name>, Page: <page_num>]
+
+2. CITATIONS — Quality over quantity:
+   - Use a MAXIMUM of 3 citations per answer.
+   - Cite only the most directly relevant sources.
+   - Format: [Section: <section_name>, Page: <page_num>]
+   - Place citations at the END of the specific sentence they support.
+   - Never stack multiple citations on one sentence.
+
+3. UNCERTAINTY — Be specific, never vague:
+   If the context does not fully support the answer, say exactly which applies:
+   - "This is not explicitly stated in the paper."
+   - "The paper does not contain this specific detail — the closest relevant section is [X]."
+   - "This can be inferred from [Section], but is not directly stated."
+   - "This question asks about something outside the scope of this paper."
+   Never say a generic "I don't know" or "unable to answer."
+
 4. Never fabricate facts, numbers, or claims not present in the context.
-5. Be precise. Research answers need to be verifiable."""
+
+5. Be precise. Research answers must be verifiable."""
 
 
 def build_context_block(chunks: list) -> str:
-    """
-    Formats retrieved chunks into a numbered context block for the prompt.
-    """
     lines = []
     for i, chunk in enumerate(chunks):
         section = chunk["metadata"]["section"]
@@ -78,26 +100,13 @@ def generate_answer(query: str, chunks: list, intents: list) -> dict:
     Assembles intent-aware prompt.
     Calls LLM.
     Returns structured response dict.
-
-    Returns:
-    {
-        "query":        str,
-        "answer":       str,
-        "intents":      list,
-        "sources":      list of {section, page} dicts,
-        "model":        str,
-        "chunk_count":  int
-    }
     """
-    # Build intent instruction — combine if multiple intents
     intent_instruction = " ".join(
         INTENT_INSTRUCTIONS.get(i, "") for i in intents
     ).strip()
 
-    # Build context block from chunks
     context = build_context_block(chunks)
 
-    # Assemble user prompt
     user_prompt = f"""Intent: {', '.join(intents)}
 Instruction: {intent_instruction}
 
@@ -106,9 +115,8 @@ Context:
 
 Question: {query}
 
-Answer (cite sources using [Section: ..., Page: ...]):"""
+Respond using the ESSENCE + DETAIL format. Maximum 3 citations total."""
 
-    # Call LLM
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
@@ -116,16 +124,15 @@ Answer (cite sources using [Section: ..., Page: ...]):"""
             {"role": "user",   "content": user_prompt}
         ],
         max_tokens=1024,
-        temperature=0.1  # slight creativity for natural answers, not 0 (too rigid for generation)
+        temperature=0.1
     )
 
     answer = response.choices[0].message.content.strip()
 
-    # Extract sources from chunks used
     sources = [
         {
-            "section": c["metadata"]["section"],
-            "page":    c["metadata"]["page_num"],
+            "section":     c["metadata"]["section"],
+            "page":        c["metadata"]["page_num"],
             "chunk_index": c["metadata"].get("chunk_index", 0)
         }
         for c in chunks
@@ -139,3 +146,4 @@ Answer (cite sources using [Section: ..., Page: ...]):"""
         "model":       "llama-3.3-70b-versatile",
         "chunk_count": len(chunks)
     }
+    
