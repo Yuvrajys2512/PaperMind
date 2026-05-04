@@ -37,7 +37,7 @@ print(SEP2)
 # ── Attempt 1 — original query, original config ───────────────────────────────
 print(f"\n{'─'*30} Attempt 1 {'─'*30}")
 routed_1    = route_query(RETRY_GATE_QUERY, PAPER_NAME)
-generated_1 = generate_answer(routed_1["query"], routed_1["chunks"], routed_1["intents"])
+generated_1 = generate_answer(routed_1["query"], routed_1["chunks"], routed_1["plan"])
 answer_1    = generated_1["answer"]
 chunks_1    = routed_1["chunks"]
 

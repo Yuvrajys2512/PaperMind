@@ -1,3 +1,22 @@
+"""
+ingestion/generator.py
+
+Upgrade 1 — Query Understanding Layer (modified)
+
+Changes from previous version:
+  - generate_answer() now accepts plan: dict instead of intents: list
+  - The plan's answer_structure is injected into the prompt as a
+    numbered checklist the model must follow
+  - The plan's answer_type drives the tone instruction (replaces INTENT_INSTRUCTIONS)
+  - Return dict now includes the full plan instead of just intents list
+
+Upgrade 2 — Chain of Thought Reasoning (applied here)
+  - The prompt now enforces a 6-step reasoning scratchpad BEFORE the
+    ESSENCE + DETAIL answer is written
+  - The reasoning chain is extracted and returned as "reasoning_chain"
+    in the response dict for debugging / audit purposes
+"""
+
 import os
 from groq import Groq
 from dotenv import load_dotenv
@@ -6,7 +25,11 @@ load_dotenv()
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-INTENT_INSTRUCTIONS = {
+# ---------------------------------------------------------------------------
+# Tone instructions keyed by answer_type (replaces old INTENT_INSTRUCTIONS)
+# ---------------------------------------------------------------------------
+
+ANSWER_TYPE_INSTRUCTIONS: dict[str, str] = {
     "factual": (
         "Answer precisely and concisely. "
         "State the exact fact, number, or definition asked for. "
@@ -32,7 +55,7 @@ INTENT_INSTRUCTIONS = {
         "Be precise about the sequence of operations and how components interact. "
         "Use technical detail from the context."
     ),
-    "explanation": (
+    "causal_explanation": (
         "Explain the reasoning and motivation behind the decision or phenomenon. "
         "Address the 'why' directly with supporting evidence from the context."
     ),
@@ -48,41 +71,90 @@ INTENT_INSTRUCTIONS = {
     ),
 }
 
+DEFAULT_INSTRUCTION = (
+    "Answer accurately using only the provided context. "
+    "Support every claim with evidence from the chunks."
+)
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
+
 SYSTEM_PROMPT = """You are PaperMind, a precise research paper Q&A assistant.
 
-## ANSWER FORMAT — ALWAYS FOLLOW THIS STRUCTURE:
+## YOUR TASK
 
-**ESSENCE:** Write 2-3 sentences capturing the single most important insight.
-This must be sharp, direct, and standalone — someone should understand the core answer from this alone.
+Work through a structured reasoning process, then write a final answer.
+
+---
+
+## STEP 1 — REASONING SCRATCHPAD
+
+Before writing your answer, complete all six reasoning steps below.
+Label each step exactly as shown.
+
+[INVENTORY]
+List what each numbered chunk explicitly states — no inference yet.
+One bullet per distinct fact.
+
+[GAPS]
+List what the question asks for that NO chunk directly addresses.
+
+[INFERENCE]
+List what can be reasonably inferred from the stated facts.
+Distinguish from direct statements.
+
+[UNCERTAINTY]
+Flag anything that must be labelled as inferred (not stated) in the answer.
+
+[STRUCTURE]
+Map the answer_structure steps to your evidence:
+For each step in the answer_structure, note which chunk(s) support it.
+
+[WRITE]
+Now write the final answer using the ESSENCE + DETAIL format below.
+
+---
+
+## FINAL ANSWER FORMAT
+
+**ESSENCE:** 2-3 sentences capturing the single most important insight.
+Sharp, direct, standalone — someone should grasp the core answer from this alone.
 
 **DETAIL:** Expand using ONLY what the context chunks explicitly state.
+Follow the answer_structure steps in order.
 Do not infer, connect, or editorialize beyond the source text.
-Every sentence in DETAIL must be traceable to a specific chunk.
-Keep to 1-2 paragraphs maximum.
+Every sentence must be traceable to a specific chunk.
+Maximum 2 paragraphs.
 
-## YOUR RULES:
+---
 
-1. Answer ONLY using the provided context chunks. Never use outside knowledge.
+## RULES
+
+1. Use ONLY the provided context chunks. Never use outside knowledge.
 
 2. CITATIONS — Quality over quantity:
-   - Use a MAXIMUM of 3 citations per answer.
+   - Maximum 3 citations per answer.
    - Cite only the most directly relevant sources.
    - Format: [Section: <section_name>, Page: <page_num>]
-   - Place citations at the END of the specific sentence they support.
+   - Place citations at the END of the sentence they support.
    - Never stack multiple citations on one sentence.
 
 3. UNCERTAINTY — Be specific, never vague:
-   If the context does not fully support the answer, say exactly which applies:
    - "This is not explicitly stated in the paper."
    - "The paper does not contain this specific detail — the closest relevant section is [X]."
    - "This can be inferred from [Section], but is not directly stated."
    - "This question asks about something outside the scope of this paper."
-   Never say a generic "I don't know" or "unable to answer."
+   Never say a generic "I don't know."
 
 4. Never fabricate facts, numbers, or claims not present in the context.
 
-5. Be precise. Research answers must be verifiable."""
+5. Complete ALL six reasoning steps before writing the answer."""
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def build_context_block(chunks: list) -> str:
     lines = []
@@ -94,56 +166,107 @@ def build_context_block(chunks: list) -> str:
     return "\n\n---\n\n".join(lines)
 
 
-def generate_answer(query: str, chunks: list, intents: list) -> dict:
+def _format_answer_structure(steps: list) -> str:
+    """Converts answer_structure list into a numbered prompt block."""
+    return "\n".join(f"  {i+1}. {step}" for i, step in enumerate(steps))
+
+
+def _extract_reasoning_and_answer(full_response: str) -> tuple[str, str]:
     """
-    Takes query, retrieved chunks, and detected intents.
-    Assembles intent-aware prompt.
-    Calls LLM.
-    Returns structured response dict.
+    Splits the model's output into:
+      - reasoning_chain : everything up to and including [WRITE]
+      - answer          : everything after [WRITE]
+
+    Falls back gracefully if the model doesn't follow the expected format.
     """
-    intent_instruction = " ".join(
-        INTENT_INSTRUCTIONS.get(i, "") for i in intents
-    ).strip()
+    marker = "[WRITE]"
+    idx = full_response.find(marker)
+    if idx == -1:
+        # Model didn't use the scratchpad format — treat whole response as answer
+        return "", full_response.strip()
+
+    reasoning_chain = full_response[: idx + len(marker)].strip()
+    answer          = full_response[idx + len(marker) :].strip()
+    return reasoning_chain, answer
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def generate_answer(query: str, chunks: list, plan: dict) -> dict:
+    """
+    Generates an answer using the Query Plan to guide structure and tone.
+
+    Parameters
+    ----------
+    query  : str   The user's original question.
+    chunks : list  Reranked context chunks from the retriever.
+    plan   : dict  Query Plan produced by query_planner.plan_query().
+                   Must contain: answer_type, answer_structure.
+
+    Returns
+    -------
+    dict with keys:
+        query           : str
+        answer          : str   Final ESSENCE + DETAIL answer.
+        reasoning_chain : str   The 5-step scratchpad (for debugging/audit).
+        plan            : dict  Full Query Plan.
+        sources         : list
+        model           : str
+        chunk_count     : int
+    """
+    answer_type      = plan.get("answer_type", "factual")
+    answer_structure = plan.get("answer_structure", [
+        "Answer the question directly using the provided context."
+    ])
+    tone_instruction = ANSWER_TYPE_INSTRUCTIONS.get(answer_type, DEFAULT_INSTRUCTION)
+    structure_block  = _format_answer_structure(answer_structure)
 
     context = build_context_block(chunks)
 
-    user_prompt = f"""Intent: {', '.join(intents)}
-Instruction: {intent_instruction}
+    user_prompt = f"""Answer Type: {answer_type}
+Tone Instruction: {tone_instruction}
+
+Answer Structure (follow these steps in the DETAIL section, in order):
+{structure_block}
 
 Context:
 {context}
 
 Question: {query}
 
-Respond using the ESSENCE + DETAIL format. Maximum 3 citations total."""
+Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → \
+[UNCERTAINTY] → [STRUCTURE] → [WRITE], then write the final answer."""
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": user_prompt}
+            {"role": "user",   "content": user_prompt},
         ],
-        max_tokens=1024,
-        temperature=0.1
+        max_tokens=1536,    # increased from 1024 to accommodate reasoning scratchpad
+        temperature=0.1,
     )
 
-    answer = response.choices[0].message.content.strip()
+    full_output     = response.choices[0].message.content.strip()
+    reasoning_chain, answer = _extract_reasoning_and_answer(full_output)
 
     sources = [
         {
             "section":     c["metadata"]["section"],
             "page":        c["metadata"]["page_num"],
-            "chunk_index": c["metadata"].get("chunk_index", 0)
+            "chunk_index": c["metadata"].get("chunk_index", 0),
         }
         for c in chunks
     ]
 
     return {
-        "query":       query,
-        "answer":      answer,
-        "intents":     intents,
-        "sources":     sources,
-        "model":       "llama-3.3-70b-versatile",
-        "chunk_count": len(chunks)
+        "query":           query,
+        "answer":          answer,
+        "reasoning_chain": reasoning_chain,   # scratchpad — expose in API for debug
+        "plan":            plan,
+        "sources":         sources,
+        "model":           "llama-3.3-70b-versatile",
+        "chunk_count":     len(chunks),
     }
-    

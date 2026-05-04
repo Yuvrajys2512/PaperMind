@@ -47,125 +47,144 @@ TEST_QUERIES = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Run
+# Core logic — importable by pytest without side-effects
 # ─────────────────────────────────────────────────────────────────────────────
 
 PAPER_NAME = "attention-is-all-you-need"
 SEP = "─" * 70
 
-print(SEP)
-print("PaperMind Phase 3 — Step 1 Verification")
-print("Testing evaluate_answer() on 5 queries")
-print(SEP)
 
-results = []
+def run_verification():
+    print(SEP)
+    print("PaperMind Phase 3 — Step 1 Verification")
+    print("Testing evaluate_answer() on 5 queries")
+    print(SEP)
 
-for i, query in enumerate(TEST_QUERIES, 1):
-    print(f"\nQuery {i}/5: {query}")
-    print("  Routing + retrieving...")
+    results = []
 
-    try:
-        routed    = route_query(query, PAPER_NAME)
-        generated = generate_answer(routed["query"], routed["chunks"], routed["intents"])
-        answer    = generated["answer"]
-        chunks    = routed["chunks"]
+    for i, query in enumerate(TEST_QUERIES, 1):
+        print(f"\nQuery {i}/5: {query}")
+        print("  Routing + retrieving...")
 
-        print("  Evaluating...")
-        scores = evaluate_answer(query, answer, chunks)
-        conf   = compute_confidence(scores["faithfulness"], scores["answer_relevancy"])
+        try:
+            routed    = route_query(query, PAPER_NAME)
+            generated = generate_answer(
+                routed["query"],
+                routed["chunks"],
+                routed["plan"],        # ← fixed: was routed["intents"]
+            )
+            answer = generated["answer"]
+            chunks = routed["chunks"]
 
-        results.append({
-            "query":             query,
-            "answer_snippet":    answer[:120].replace("\n", " "),
-            "faithfulness":      scores["faithfulness"],
-            "answer_relevancy":  scores["answer_relevancy"],
-            "confidence":        conf,
-            "method":            scores["method"],
-        })
+            print("  Evaluating...")
+            scores = evaluate_answer(query, answer, chunks)
+            conf   = compute_confidence(scores["faithfulness"], scores["answer_relevancy"])
 
-        print(f"  Method:           {scores['method']}")
-        print(f"  Faithfulness:     {scores['faithfulness']:.4f}")
-        print(f"  Answer relevancy: {scores['answer_relevancy']:.4f}")
-        print(f"  Confidence:       {conf:.1f}/100")
-        print(f"  Answer snippet:   {answer[:100].replace(chr(10), ' ')}...")
+            results.append({
+                "query":            query,
+                "answer_snippet":   answer[:120].replace("\n", " "),
+                "faithfulness":     scores["faithfulness"],
+                "answer_relevancy": scores["answer_relevancy"],
+                "confidence":       conf,
+                "method":           scores["method"],
+            })
 
-    except Exception as e:
-        print(f"  ERROR: {e}")
-        results.append({"query": query, "error": str(e)})
+            print(f"  Method:           {scores['method']}")
+            print(f"  Faithfulness:     {scores['faithfulness']:.4f}")
+            print(f"  Answer relevancy: {scores['answer_relevancy']:.4f}")
+            print(f"  Confidence:       {conf:.1f}/100")
+            print(f"  Answer snippet:   {answer[:100].replace(chr(10), ' ')}...")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Summary + pass/fail
-# ─────────────────────────────────────────────────────────────────────────────
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            results.append({"query": query, "error": str(e)})
 
-print(f"\n{SEP}")
-print("SUMMARY")
-print(SEP)
+    return results
 
-clean_results = [r for r in results if "error" not in r]
 
-if not clean_results:
-    print("No results — all queries failed. Fix errors above before proceeding.")
-    sys.exit(1)
+def print_summary(results):
+    print(f"\n{SEP}")
+    print("SUMMARY")
+    print(SEP)
 
-print(f"\n{'Query':<55} {'Faith':>6} {'Relev':>6} {'Conf':>6}  Method")
-print("─" * 80)
-for r in clean_results:
-    label = r["query"][:52] + "..." if len(r["query"]) > 55 else r["query"]
-    print(f"{label:<55} {r['faithfulness']:>6.3f} {r['answer_relevancy']:>6.3f} {r['confidence']:>6.1f}  {r['method']}")
+    clean_results = [r for r in results if "error" not in r]
 
-# ── Pass / fail checks ───────────────────────────────────────────────────────
-print(f"\n{SEP}")
-print("VERIFICATION GATE CHECKS")
-print(SEP)
+    if not clean_results:
+        print("No results — all queries failed. Fix errors above before proceeding.")
+        return False
 
-# Check 1: Good factual answers score > 0.80 faithfulness
-good_queries_idx = [0, 1, 2]  # optimizer, multi-head, layer count
-good_results     = [clean_results[i] for i in good_queries_idx if i < len(clean_results)]
-good_faiths      = [r["faithfulness"] for r in good_results]
+    print(f"\n{'Query':<55} {'Faith':>6} {'Relev':>6} {'Conf':>6}  Method")
+    print("─" * 80)
+    for r in clean_results:
+        label = r["query"][:52] + "..." if len(r["query"]) > 55 else r["query"]
+        print(f"{label:<55} {r['faithfulness']:>6.3f} {r['answer_relevancy']:>6.3f} "
+              f"{r['confidence']:>6.1f}  {r['method']}")
 
-if good_faiths:
-    avg_good_faith = sum(good_faiths) / len(good_faiths)
-    check1 = avg_good_faith > 0.70  # using 0.70 as minimum average — RAGAS vs local differ in scale
+    print(f"\n{SEP}")
+    print("VERIFICATION GATE CHECKS")
+    print(SEP)
+
+    good_queries_idx = [0, 1, 2]
+    good_results     = [clean_results[i] for i in good_queries_idx if i < len(clean_results)]
+    good_faiths      = [r["faithfulness"] for r in good_results]
+    avg_good_faith   = sum(good_faiths) / len(good_faiths) if good_faiths else 0
+
+    check1 = avg_good_faith > 0.70
     print(f"\n[{'PASS' if check1 else 'WARN'}] Factual answers avg faithfulness: {avg_good_faith:.3f}")
     if not check1:
         print("       Note: If using local scorer, 0.50–0.75 is typical.")
-        print("       RAGAS and local scorers have different absolute scales.")
         print("       This is informational — check the numbers manually.")
 
-# Check 2: Hypothetical answer scores lower than factual average
-if len(clean_results) > 3:
-    hyp_faith = clean_results[3]["faithfulness"]
-    check2    = hyp_faith < avg_good_faith if good_faiths else True
-    print(f"\n[{'PASS' if check2 else 'NOTE'}] Hypothetical faithfulness ({hyp_faith:.3f}) "
-          f"{'<' if check2 else '>='} factual avg ({avg_good_faith:.3f})")
+    if len(clean_results) > 3:
+        hyp_faith = clean_results[3]["faithfulness"]
+        check2    = hyp_faith < avg_good_faith if good_faiths else True
+        print(f"\n[{'PASS' if check2 else 'NOTE'}] Hypothetical faithfulness ({hyp_faith:.3f}) "
+              f"{'<' if check2 else '>='} factual avg ({avg_good_faith:.3f})")
 
-# Check 3: Q8 (vocabulary mismatch) gets low score — it should need retry
-if len(clean_results) > 4:
-    q8_conf = clean_results[4]["confidence"]
-    print(f"\n[INFO] Q8 confidence: {q8_conf:.1f}/100")
-    print(f"       This is the query that Phase 3 retry must fix.")
-    print(f"       Low score here is expected and correct — not a failure.")
+    if len(clean_results) > 4:
+        q8_conf = clean_results[4]["confidence"]
+        print(f"\n[INFO] Q8 confidence: {q8_conf:.1f}/100")
+        print(f"       This is the query that Phase 3 retry must fix.")
 
-# Check 4: No crashes
-crashes = [r for r in results if "error" in r]
-check4  = len(crashes) == 0
-print(f"\n[{'PASS' if check4 else 'FAIL'}] No crashes: {len(crashes)} error(s)")
-if crashes:
-    for c in crashes:
-        print(f"       ✗ {c['query']}: {c['error']}")
+    crashes = [r for r in results if "error" in r]
+    check4  = len(crashes) == 0
+    print(f"\n[{'PASS' if check4 else 'FAIL'}] No crashes: {len(crashes)} error(s)")
+    if crashes:
+        for c in crashes:
+            print(f"       ✗ {c['query']}: {c['error']}")
 
-# Check 5: scorer method
-methods = list(set(r["method"] for r in clean_results))
-print(f"\n[INFO] Scorer used: {', '.join(methods)}")
-if "ragas" in methods:
-    print("       RAGAS is working without an OpenAI key.")
-elif "local" in methods:
-    print("       Local embedding scorer active (RAGAS requires OpenAI key).")
+    methods = list(set(r["method"] for r in clean_results))
+    print(f"\n[INFO] Scorer used: {', '.join(methods)}")
+    if "local" in methods:
+        print("       Local embedding scorer active.")
 
-print(f"\n{SEP}")
-if check4 and clean_results:
-    print("Step 1 verification complete.")
-    print("Report the numbers above and we'll decide if we proceed to Step 2.")
-else:
-    print("Fix errors above before proceeding.")
-print(SEP)
+    print(f"\n{SEP}")
+    if check4 and clean_results:
+        print("Step 1 verification complete.")
+        print("Report the numbers above and we'll decide if we proceed to Step 2.")
+    else:
+        print("Fix errors above before proceeding.")
+    print(SEP)
+
+    return check4 and bool(clean_results)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pytest-compatible test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_evaluator_runs():
+    """Pytest entry point — verifies the pipeline runs without crashing."""
+    results = run_verification()
+    errors  = [r for r in results if "error" in r]
+    assert len(errors) == 0, f"Queries failed: {[r['error'] for r in errors]}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Direct run
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    results = run_verification()
+    passed  = print_summary(results)
+    sys.exit(0 if passed else 1)   # ← guarded: only exits when run directly

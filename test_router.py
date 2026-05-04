@@ -16,7 +16,7 @@ test_queries = [
 for q in test_queries:
     result = route_query(q, PAPER)
     print(f"\nQuery   : {q}")
-    print(f"Intents : {result['intents']}")
+    print(f"Plan    : {result['plan']}")
     print(f"Config  : retrieval_k={result['config']['retrieval_k']} | llm_k={result['config']['llm_k']}")
     print(f"Chunks  : {len(result['chunks'])} returned")
     for i, c in enumerate(result['chunks']):

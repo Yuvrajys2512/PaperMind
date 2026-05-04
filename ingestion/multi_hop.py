@@ -6,6 +6,14 @@ then runs retrieval for each and merges the results.
 
 This ensures the retriever pulls chunks from multiple relevant
 sections of the paper rather than clustering around one.
+
+Upgrade 1 change
+----------------
+multi_hop_retrieve() now accepts an optional sub_questions parameter.
+When the query_router passes sub_questions from the Query Plan,
+decompose_query() is skipped entirely — saving one LLM call per
+multi-hop request.  If sub_questions is None (e.g. direct callers,
+tests), the old decomposition behaviour is preserved as a fallback.
 """
 
 import os
@@ -37,6 +45,9 @@ def decompose_query(query: str) -> list[str]:
     """
     Calls the LLM to break a complex query into 2-3 sub-questions.
     Falls back to [query] if decomposition fails for any reason.
+
+    Note: this is only called when sub_questions are NOT supplied by
+    the query_router (i.e. legacy callers or direct test calls).
     """
     try:
         response = client.chat.completions.create(
@@ -67,7 +78,6 @@ def decompose_query(query: str) -> list[str]:
                 print(f"  {i}. {q}")
             return sub_questions
 
-        # If structure is wrong, fall back
         print("[multi_hop] Decomposition returned unexpected structure, falling back.")
         return [query]
 
@@ -76,34 +86,57 @@ def decompose_query(query: str) -> list[str]:
         return [query]
 
 
-def multi_hop_retrieve(query: str, paper_name: str, retrieval_k: int) -> list:
+def multi_hop_retrieve(
+    query: str,
+    paper_name: str,
+    retrieval_k: int,
+    sub_questions: list[str] | None = None,   # ← Upgrade 1: supplied by query_router
+) -> list:
     """
-    Decomposes the query, retrieves for each sub-question,
-    merges results, and deduplicates by chunk id.
+    Retrieves chunks for each sub-question and merges + deduplicates results.
 
-    Returns a merged list of unique chunks ready for reranking.
-    The original query is always included as one retrieval pass
-    to ensure we don't miss direct matches.
+    Parameters
+    ----------
+    query         : str            Original user question (always used as one retrieval pass).
+    paper_name    : str            Paper ID scoping the vector-store lookup.
+    retrieval_k   : int            How many chunks to retrieve per sub-question.
+    sub_questions : list[str] | None
+        Pre-computed sub-questions from the Query Plan (query_router passes these).
+        If None, decompose_query() is called to generate them — preserving the
+        original behaviour for any direct callers or existing tests.
+
+    Returns
+    -------
+    list  Merged, deduplicated chunks ready for reranking.
     """
-    sub_questions = decompose_query(query)
+    if sub_questions is not None:
+        # ── Fast path: use plan's sub-questions, skip LLM decomposition ──
+        print(f"[multi_hop] Using {len(sub_questions)} sub-questions from Query Plan.")
+        for i, q in enumerate(sub_questions, 1):
+            print(f"  {i}. {q}")
+    else:
+        # ── Fallback: derive sub-questions via LLM (legacy behaviour) ────
+        print("[multi_hop] No sub_questions supplied — running decompose_query().")
+        sub_questions = decompose_query(query)
 
     # Always include the original query as a retrieval pass
     all_queries = [query] + [q for q in sub_questions if q != query]
 
-    seen_ids = set()
+    seen_ids      = set()
     merged_chunks = []
 
     for q in all_queries:
         results = hybrid_retrieve(q, paper_name, top_k=retrieval_k)
         for chunk in results:
-            # Use chunk_id from metadata as dedup key
             chunk_id = chunk["metadata"].get("chunk_id")
             if chunk_id is None:
-                # Fall back to text hash if no chunk_id
                 chunk_id = hash(chunk["text"])
             if chunk_id not in seen_ids:
                 seen_ids.add(chunk_id)
                 merged_chunks.append(chunk)
 
-    print(f"[multi_hop] Retrieved {len(merged_chunks)} unique chunks across {len(all_queries)} queries.")
+    print(
+        f"[multi_hop] {len(merged_chunks)} unique chunks across "
+        f"{len(all_queries)} retrieval queries."
+    )
     return merged_chunks

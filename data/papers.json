@@ -102,5 +102,29 @@
     "uploaded_at": "2026-05-03T20:05:12.481519",
     "completed_at": "2026-05-03T20:06:01.858168",
     "error": null
+  },
+  "65a6835b-173d-4ea1-a679-d667c4cfaf17": {
+    "paper_id": "65a6835b-173d-4ea1-a679-d667c4cfaf17",
+    "filename": "attention_is_all_you_need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-04T21:23:51.988723",
+    "completed_at": "2026-05-04T21:23:51.998585",
+    "error": null
+  },
+  "b657056b-6504-4494-93c1-d6a05e7c26cd": {
+    "paper_id": "b657056b-6504-4494-93c1-d6a05e7c26cd",
+    "filename": "attention_is_all_you_need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-04T21:32:00.269284",
+    "completed_at": "2026-05-04T21:32:00.286665",
+    "error": null
+  },
+  "cf58e268-7d62-42af-a420-0fd1bbe2c219": {
+    "paper_id": "cf58e268-7d62-42af-a420-0fd1bbe2c219",
+    "filename": "attention_is_all_you_need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-04T21:37:33.241016",
+    "completed_at": "2026-05-04T21:37:33.264611",
+    "error": null
   }
 }

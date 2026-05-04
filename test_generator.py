@@ -18,11 +18,11 @@ for query in test_queries:
     # Route — intent detection + retrieval
     routed = route_query(query, PAPER)
 
-    print(f"INTENTS : {routed['intents']}")
+    print(f"PLAN    : {routed['plan']}")
     print(f"CHUNKS  : {routed['config']['llm_k']} sent to LLM")
 
     # Generate answer
-    result = generate_answer(query, routed["chunks"], routed["intents"])
+    result = generate_answer(query, routed["chunks"], routed["plan"])
 
     print(f"\nANSWER  :\n{result['answer']}")
     print(f"\nSOURCES :")
