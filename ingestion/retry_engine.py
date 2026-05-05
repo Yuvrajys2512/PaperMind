@@ -8,11 +8,7 @@ retry_query(query, paper_name, failure_type, attempt) -> dict
 """
 
 from __future__ import annotations
-import os
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
+from ingestion.llm_client import chat_completion
 
 # ── Diagnosis thresholds ──────────────────────────────────────────────────────
 _RERANK_RELEVANCE_THRESHOLD        = 0.0
@@ -49,7 +45,6 @@ def diagnose_failure(
         top_score    = max(rerank_scores)
         retrieval_ok = top_score >= _RERANK_RELEVANCE_THRESHOLD
     else:
-        # No rerank scores in chunks — use faithfulness as proxy
         retrieval_ok = faithfulness >= 0.05
 
     if not retrieval_ok:
@@ -87,14 +82,11 @@ def _expand_query(query: str) -> str:
         "Rewritten question:"
     )
     try:
-        client   = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-        response = client.chat.completions.create(
-            model       = "llama-3.3-70b-versatile",
+        expanded = chat_completion(
             messages    = [{"role": "user", "content": prompt}],
             temperature = 0.3,
             max_tokens  = 80,
         )
-        expanded = response.choices[0].message.content.strip()
         print(f"[retry] Query expanded:\n  Original: {query}\n  Expanded: {expanded}")
         return expanded
     except Exception as e:
@@ -129,15 +121,14 @@ def _run_attempt(
     from ingestion.query_router import route_query
     from ingestion.generator    import generate_answer
 
-    routed  = route_query(query, paper_name)
-    chunks  = routed["chunks"]
-    intents = routed["intents"]
+    routed = route_query(query, paper_name)
+    chunks = routed["chunks"]
+    plan   = routed["plan"]       # ← fixed: was routed["intents"]
 
-    # Slice chunks if we want to tighten the generation context
     if llm_k_slice is not None:
         chunks = chunks[:llm_k_slice]
 
-    generated = generate_answer(query, chunks, intents)
+    generated = generate_answer(query, chunks, plan)   # ← fixed: was intents
 
     return {
         "answer":     generated["answer"],
@@ -186,24 +177,17 @@ def retry_query(
     print(f"\n[retry] Attempt {attempt} | failure_type={failure_type}")
 
     if failure_type == "retrieval":
-        # Both attempts expand the query — this is the core fix for vocab mismatch.
-        # The expansion call gives a different result each time (temperature=0.3).
         expanded = _expand_query(query)
 
         if attempt == 2:
             result = _run_attempt(expanded, paper_name, llm_k_slice=None)
         else:
-            # attempt 3: use expanded query but tighten to top 3 chunks
-            # so the generator has less noise to sift through
             result = _run_attempt(expanded, paper_name, llm_k_slice=3)
 
     else:  # generation failure
         if attempt == 2:
-            # Same query, but reduce context to top 4 chunks
-            # Forces generator to use only the most relevant retrieved content
             result = _run_attempt(query, paper_name, llm_k_slice=4)
         else:
-            # attempt 3: expand query AND tighten context
             expanded = _expand_query(query)
             result   = _run_attempt(expanded, paper_name, llm_k_slice=3)
 

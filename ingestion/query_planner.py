@@ -10,14 +10,8 @@ consumed by:
   - generator.py     → drives answer structure and tone
 """
 
-import os
 import json
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
-
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+from ingestion.llm_client import chat_completion
 
 # ---------------------------------------------------------------------------
 # Planner prompt
@@ -87,8 +81,7 @@ def plan_query(query: str) -> dict:
     On JSON parse failure a safe fallback plan is returned so the pipeline
     never hard-crashes at the planning stage.
     """
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+    raw = chat_completion(
         messages=[
             {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
             {"role": "user",   "content": f"Question: {query}"}
@@ -96,8 +89,6 @@ def plan_query(query: str) -> dict:
         max_tokens=512,
         temperature=0.0,   # deterministic — planning should be stable
     )
-
-    raw = response.choices[0].message.content.strip()
 
     try:
         plan = json.loads(raw)

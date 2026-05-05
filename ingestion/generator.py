@@ -17,13 +17,7 @@ Upgrade 2 — Chain of Thought Reasoning (applied here)
     in the response dict for debugging / audit purposes
 """
 
-import os
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
-
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+from ingestion.llm_client import chat_completion
 
 # ---------------------------------------------------------------------------
 # Tone instructions keyed by answer_type (replaces old INTENT_INSTRUCTIONS)
@@ -182,7 +176,6 @@ def _extract_reasoning_and_answer(full_response: str) -> tuple[str, str]:
     marker = "[WRITE]"
     idx = full_response.find(marker)
     if idx == -1:
-        # Model didn't use the scratchpad format — treat whole response as answer
         return "", full_response.strip()
 
     reasoning_chain = full_response[: idx + len(marker)].strip()
@@ -239,17 +232,15 @@ Question: {query}
 Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → \
 [UNCERTAINTY] → [STRUCTURE] → [WRITE], then write the final answer."""
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+    full_output = chat_completion(
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": user_prompt},
         ],
-        max_tokens=1536,    # increased from 1024 to accommodate reasoning scratchpad
+        max_tokens=1536,
         temperature=0.1,
     )
 
-    full_output     = response.choices[0].message.content.strip()
     reasoning_chain, answer = _extract_reasoning_and_answer(full_output)
 
     sources = [
@@ -264,9 +255,9 @@ Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → 
     return {
         "query":           query,
         "answer":          answer,
-        "reasoning_chain": reasoning_chain,   # scratchpad — expose in API for debug
+        "reasoning_chain": reasoning_chain,
         "plan":            plan,
         "sources":         sources,
-        "model":           "llama-3.3-70b-versatile",
+        "model":           "multi-provider",
         "chunk_count":     len(chunks),
     }

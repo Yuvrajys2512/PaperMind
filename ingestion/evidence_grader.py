@@ -28,14 +28,8 @@ grade_answer(answer, chunks) -> dict
 
 from __future__ import annotations
 
-import os
 import json
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
-
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+from ingestion.llm_client import chat_completion
 
 # ---------------------------------------------------------------------------
 # Grader prompt
@@ -93,20 +87,17 @@ def _split_sentences(text: str) -> list[str]:
         line = line.strip()
         if not line:
             continue
-        # Keep section headers as single units
         if line.startswith("**") and line.endswith("**"):
             sentences.append(line)
             continue
-        # Split on ". " but avoid splitting on abbreviations like "Fig. 3"
         parts = line.split(". ")
         for i, part in enumerate(parts):
             part = part.strip()
             if not part:
                 continue
-            # Re-attach the period (except for the last part if line ended cleanly)
             if i < len(parts) - 1:
                 part = part + "."
-            if len(part) > 15:   # skip very short fragments
+            if len(part) > 15:
                 sentences.append(part)
     return sentences
 
@@ -149,18 +140,14 @@ Answer Sentences to Grade:
 Classify every sentence. Return only the JSON array."""
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+        raw = chat_completion(
             messages=[
                 {"role": "system", "content": GRADER_SYSTEM_PROMPT},
                 {"role": "user",   "content": user_prompt},
             ],
             max_tokens=1024,
-            temperature=0.0,   # deterministic — grading should be stable
+            temperature=0.0,
         )
-        raw = response.choices[0].message.content.strip()
-
-        # Strip markdown fences if model adds them despite instructions
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -182,13 +169,7 @@ Classify every sentence. Return only the JSON array."""
 def _reconstruct_answer(sentences: list[str], grades: list[dict]) -> tuple[str, list[dict]]:
     """
     Rebuilds the answer, dropping UNSUPPORTED sentences.
-
-    Returns
-    -------
-    cleaned_text : str
-    enriched_grades : list[dict]  — grades with 'kept' boolean added
     """
-    # Build a grade map keyed by sentence text (first 60 chars for robustness)
     grade_map: dict[str, str] = {}
     for g in grades:
         key = g.get("sentence", "")[:60].strip()
@@ -199,9 +180,8 @@ def _reconstruct_answer(sentences: list[str], grades: list[dict]) -> tuple[str, 
 
     for i, sent in enumerate(sentences):
         key   = sent[:60].strip()
-        grade = grade_map.get(key, "INFERRED")   # default INFERRED if not found
+        grade = grade_map.get(key, "INFERRED")
 
-        # Find the matching grade entry for chunk_ref
         chunk_ref = "none"
         for g in grades:
             if g.get("sentence", "")[:60].strip() == key:
@@ -231,20 +211,6 @@ def grade_answer(answer: str, chunks: list) -> dict:
     """
     Grade every sentence in the answer against the source chunks,
     and return a cleaned answer with UNSUPPORTED sentences removed.
-
-    Parameters
-    ----------
-    answer : str   The generated answer (ESSENCE + DETAIL format).
-    chunks : list  Retrieved chunks used to generate the answer.
-
-    Returns
-    -------
-    dict:
-        cleaned_answer  : str         Answer with UNSUPPORTED sentences removed.
-        original_answer : str         Unmodified original answer.
-        grades          : list[dict]  Per-sentence: sentence, grade, chunk_ref, kept.
-        removed_count   : int         Number of sentences removed.
-        grading_failed  : bool        True if LLM call failed; original returned as-is.
     """
     sentences = _split_sentences(answer)
 
@@ -260,8 +226,6 @@ def grade_answer(answer: str, chunks: list) -> dict:
     grades = _call_grader(sentences, chunks)
 
     if grades is None:
-        # Grading failed — return original answer unchanged so the pipeline
-        # doesn't crash. Flag it so the caller can log/surface the failure.
         print("[evidence_grader] Grading failed — returning original answer unchanged.")
         return {
             "cleaned_answer":  answer,
@@ -272,7 +236,6 @@ def grade_answer(answer: str, chunks: list) -> dict:
         }
 
     cleaned_text, enriched_grades = _reconstruct_answer(sentences, grades)
-
     removed = sum(1 for g in enriched_grades if not g["kept"])
 
     print(

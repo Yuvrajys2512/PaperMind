@@ -126,5 +126,53 @@
     "uploaded_at": "2026-05-04T21:37:33.241016",
     "completed_at": "2026-05-04T21:37:33.264611",
     "error": null
+  },
+  "f6b0359c-031d-4cb4-b5a7-6b5d3165ea31": {
+    "paper_id": "f6b0359c-031d-4cb4-b5a7-6b5d3165ea31",
+    "filename": "attention_is_all_you_need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-05T11:19:32.120632",
+    "completed_at": "2026-05-05T11:19:32.133295",
+    "error": null
+  },
+  "d4351295-49f3-481b-bd84-78d534f21a26": {
+    "paper_id": "d4351295-49f3-481b-bd84-78d534f21a26",
+    "filename": "attention_is_all_you_need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-05T11:43:30.117620",
+    "completed_at": "2026-05-05T11:43:30.129203",
+    "error": null
+  },
+  "03b855c8-5595-4aab-bed3-66fd04024778": {
+    "paper_id": "03b855c8-5595-4aab-bed3-66fd04024778",
+    "filename": "attention_is_all_you_need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-05T11:53:43.911284",
+    "completed_at": "2026-05-05T11:53:43.922486",
+    "error": null
+  },
+  "d1ce827d-8ddc-4d29-9451-547268b5dd7c": {
+    "paper_id": "d1ce827d-8ddc-4d29-9451-547268b5dd7c",
+    "filename": "attention_is_all_you_need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-05T12:09:31.523036",
+    "completed_at": "2026-05-05T12:09:31.536442",
+    "error": null
+  },
+  "ff7e0906-8bc8-4e48-98f3-08fd5657e39a": {
+    "paper_id": "ff7e0906-8bc8-4e48-98f3-08fd5657e39a",
+    "filename": "attention_is_all_you_need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-05T12:21:19.350249",
+    "completed_at": "2026-05-05T12:21:19.363099",
+    "error": null
+  },
+  "bbc1428c-320c-4d4d-8d5d-f622e3860dfe": {
+    "paper_id": "bbc1428c-320c-4d4d-8d5d-f622e3860dfe",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-05T12:28:32.951558",
+    "completed_at": "2026-05-05T12:29:14.114243",
+    "error": null
   }
 }
