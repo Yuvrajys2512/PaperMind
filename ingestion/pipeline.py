@@ -106,8 +106,22 @@ def answer_query(query: str, paper_name: str) -> dict:
                 sources         = []
                 plan            = retry_result.get("plan", {})
 
-            # ── Step 3: Evidence Grading ──────────────────────────────────
-            grading_result = grade_answer(raw_answer, chunks)
+            # ── Step 3: Evidence Grading (skipped if faithfulness already strong) ─────────
+            _eval_for_skip = evaluate_answer(query, raw_answer, chunks)
+            if _eval_for_skip["faithfulness"] > 0.75:
+                print("[pipeline] Faithfulness strong — skipping evidence grading.")
+                grading_result = {
+                    "cleaned_answer":  raw_answer,
+                    "original_answer": raw_answer,
+                    "grades":          [],
+                    "removed_count":   0,
+                    "grading_failed":  False,
+                }
+                eval_scores = _eval_for_skip
+            else:
+                grading_result = grade_answer(raw_answer, chunks)
+                answer = grading_result["cleaned_answer"]
+                eval_scores = evaluate_answer(query, answer, chunks)
 
             # Use the cleaned answer everywhere downstream
             answer = grading_result["cleaned_answer"]
@@ -117,9 +131,6 @@ def answer_query(query: str, paper_name: str) -> dict:
                     f"[pipeline] Attempt {attempt}: evidence grader removed "
                     f"{grading_result['removed_count']} unsupported sentence(s)."
                 )
-
-            # ── Step 4: Evaluate CLEANED answer ───────────────────────────
-            eval_scores = evaluate_answer(query, answer, chunks)
             confidence  = compute_confidence(
                 eval_scores["faithfulness"],
                 eval_scores["answer_relevancy"],

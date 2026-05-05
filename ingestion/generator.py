@@ -237,7 +237,7 @@ Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → 
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": user_prompt},
         ],
-        max_tokens=1536,
+        max_tokens=1024,
         temperature=0.1,
     )
 

@@ -102,6 +102,7 @@ def route_query(query: str, paper_name: str) -> dict:
             paper_name    = paper_name,
             retrieval_k   = config["retrieval_k"],
             sub_questions = plan["sub_questions"],   # ← from plan
+            boost_terms   = plan.get("key_concepts", []),
         )
     else:
         print("[router] Single-pass retrieval")
@@ -109,6 +110,7 @@ def route_query(query: str, paper_name: str) -> dict:
             query,
             paper_name,
             top_k=config["retrieval_k"],
+            boost_terms=plan.get("key_concepts", []),
         )
 
     # ── Step 4: rerank ────────────────────────────────────────────────────

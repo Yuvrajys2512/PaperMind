@@ -86,7 +86,7 @@ def plan_query(query: str) -> dict:
             {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
             {"role": "user",   "content": f"Question: {query}"}
         ],
-        max_tokens=512,
+        max_tokens=200,
         temperature=0.0,   # deterministic — planning should be stable
     )
 

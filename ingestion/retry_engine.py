@@ -67,7 +67,7 @@ def diagnose_failure(
 # Step 4 — Query expansion
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _expand_query(query: str) -> str:
+def _expand_query(query: str, paper_name: str = "the paper") -> str:
     """
     Rewrite query using technical vocabulary from the paper.
     Helps when everyday language doesn't match the paper's terminology.
@@ -75,7 +75,7 @@ def _expand_query(query: str) -> str:
     prompt = (
         "You are helping a research paper question-answering system improve retrieval.\n"
         "Rewrite the following question using precise academic and technical vocabulary "
-        "that would appear in the paper 'Attention Is All You Need' by Vaswani et al.\n"
+        f"that would appear in '{paper_name}'.\n"
         "Focus on the specific technical terms, algorithm names, and section topics "
         "used in the paper. Return ONLY the rewritten question, nothing else.\n\n"
         f"Original question: {query}\n"
@@ -177,7 +177,7 @@ def retry_query(
     print(f"\n[retry] Attempt {attempt} | failure_type={failure_type}")
 
     if failure_type == "retrieval":
-        expanded = _expand_query(query)
+        expanded = _expand_query(query, paper_name)
 
         if attempt == 2:
             result = _run_attempt(expanded, paper_name, llm_k_slice=None)
@@ -188,7 +188,7 @@ def retry_query(
         if attempt == 2:
             result = _run_attempt(query, paper_name, llm_k_slice=4)
         else:
-            expanded = _expand_query(query)
+            expanded = _expand_query(query, paper_name)
             result   = _run_attempt(expanded, paper_name, llm_k_slice=3)
 
     result["attempt"]      = attempt

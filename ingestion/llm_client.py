@@ -26,16 +26,6 @@ load_dotenv()
 
 _PROVIDERS: list[dict] = []
 
-if os.getenv("GEMINI_API_KEY"):
-    _PROVIDERS.append({
-        "name":   "Gemini Flash",
-        "client": OpenAI(
-            api_key  = os.getenv("GEMINI_API_KEY"),
-            base_url = "https://generativelanguage.googleapis.com/v1beta/openai/",
-        ),
-        "model": "gemini-2.0-flash",
-    })
-
 if os.getenv("CEREBRAS_API_KEY"):
     _PROVIDERS.append({
         "name":   "Cerebras",

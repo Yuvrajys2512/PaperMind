@@ -91,6 +91,7 @@ def multi_hop_retrieve(
     paper_name: str,
     retrieval_k: int,
     sub_questions: list[str] | None = None,   # ← Upgrade 1: supplied by query_router
+    boost_terms:   list[str] | None = None,
 ) -> list:
     """
     Retrieves chunks for each sub-question and merges + deduplicates results.
@@ -104,6 +105,8 @@ def multi_hop_retrieve(
         Pre-computed sub-questions from the Query Plan (query_router passes these).
         If None, decompose_query() is called to generate them — preserving the
         original behaviour for any direct callers or existing tests.
+    boost_terms   : list[str] | None
+        Key concepts to boost during retrieval.
 
     Returns
     -------
@@ -126,7 +129,7 @@ def multi_hop_retrieve(
     merged_chunks = []
 
     for q in all_queries:
-        results = hybrid_retrieve(q, paper_name, top_k=retrieval_k)
+        results = hybrid_retrieve(q, paper_name, top_k=retrieval_k, boost_terms=boost_terms)
         for chunk in results:
             chunk_id = chunk["metadata"].get("chunk_id")
             if chunk_id is None:

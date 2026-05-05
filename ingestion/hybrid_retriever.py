@@ -32,12 +32,17 @@ def reciprocal_rank_fusion(bm25_results, vector_results, k=60):
     return merged
 
 
-def hybrid_retrieve(query: str, paper_name: str, top_k: int = 5):
+def hybrid_retrieve(query: str, paper_name: str, top_k: int = 5, boost_terms: list[str] = None):
     """
     Runs BM25 + vector search in parallel, merges with RRF,
     returns top_k results.
     """
-    bm25_results = bm25_retrieve(query, paper_name, top_k=10)
+    if boost_terms:
+        boosted_query = query + " " + " ".join(boost_terms)
+    else:
+        boosted_query = query
+
+    bm25_results = bm25_retrieve(boosted_query, paper_name, top_k=10)
     vector_results = retrieve(query, paper_name, top_k=10)
 
     merged = reciprocal_rank_fusion(bm25_results, vector_results)
