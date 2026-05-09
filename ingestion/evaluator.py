@@ -1,10 +1,10 @@
 """
-ingestion/evaluator.py — Phase 3, Step 1
+ingestion/evaluator.py
 
 Evaluates LLM-generated answers for faithfulness and answer relevancy
 using local embedding-similarity scoring (all-MiniLM-L6-v2).
 
-No OpenAI key required. No RAGAS dependency.
+No API calls required.
 
 Public API
 ----------
@@ -13,16 +13,9 @@ compute_confidence(faithfulness, answer_relevancy) → float (0-100)
 """
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from ingestion.models import get_embedding_model
 
-_embedder: SentenceTransformer | None = None
-
-
-def _get_embedder() -> SentenceTransformer:
-    global _embedder
-    if _embedder is None:
-        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    return _embedder
+_SUPPORT_THRESHOLD = 0.55
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -47,61 +40,30 @@ def _split_into_sentences(text: str) -> list[str]:
     return [s.strip() for s in raw if len(s.strip()) > 20]
 
 
-# A sentence is "supported" by a chunk if cosine similarity >= this threshold.
-# Tuned for all-MiniLM-L6-v2 on academic text.
-_SUPPORT_THRESHOLD = 0.55
-
-
 def _score_faithfulness(answer: str, chunk_texts: list[str]) -> float:
-    """
-    Proportion of answer sentences that are semantically supported
-    by at least one retrieved chunk. Range: 0.0 – 1.0.
-    Typical good answer: 0.55 – 0.85 with this model.
-    """
     sentences = _split_into_sentences(answer)
     if not sentences:
         return 0.0
 
-    embedder      = _get_embedder()
-    chunk_embs    = embedder.encode(chunk_texts)
-    sentence_embs = embedder.encode(sentences)
+    model         = get_embedding_model()
+    chunk_embs    = model.encode(chunk_texts)
+    sentence_embs = model.encode(sentences)
 
-    supported = 0
-    for sent_emb in sentence_embs:
-        sims = [_cosine_similarity(sent_emb, ce) for ce in chunk_embs]
-        if max(sims) >= _SUPPORT_THRESHOLD:
-            supported += 1
-
+    supported = sum(
+        1 for sent_emb in sentence_embs
+        if max(_cosine_similarity(sent_emb, ce) for ce in chunk_embs) >= _SUPPORT_THRESHOLD
+    )
     return supported / len(sentences)
 
 
 def _score_answer_relevancy(query: str, answer: str) -> float:
-    """
-    Cosine similarity between query and answer embeddings.
-    Higher = more on-topic. Range: 0.0 – 1.0.
-    Typical good answer: 0.40 – 0.75.
-    """
-    embedder   = _get_embedder()
-    query_emb  = embedder.encode([query])[0]
-    answer_emb = embedder.encode([answer])[0]
+    model      = get_embedding_model()
+    query_emb  = model.encode([query])[0]
+    answer_emb = model.encode([answer])[0]
     return _cosine_similarity(query_emb, answer_emb)
 
 
 def evaluate_answer(query: str, answer: str, chunks: list) -> dict:
-    """
-    Evaluate a generated answer for faithfulness and answer relevancy.
-    No API calls. No external keys required.
-
-    Parameters
-    ----------
-    query  : original user question
-    answer : LLM-generated answer
-    chunks : list of chunk dicts (with 'text' key) or plain strings
-
-    Returns
-    -------
-    { faithfulness: float, answer_relevancy: float, method: "local" }
-    """
     chunk_texts = _extract_chunk_texts(chunks)
 
     if not chunk_texts:
@@ -118,9 +80,5 @@ def evaluate_answer(query: str, answer: str, chunks: list) -> dict:
 
 
 def compute_confidence(faithfulness_score: float, answer_relevancy_score: float) -> float:
-    """
-    (faithfulness × 0.7 + answer_relevancy × 0.3) × 100
-    Returns a score between 0 and 100.
-    """
-    raw = (faithfulness_score * 0.7) + (answer_relevancy_score * 0.3)
-    return round(raw * 100, 2)
+    """(faithfulness × 0.7 + answer_relevancy × 0.3) × 100"""
+    return round(((faithfulness_score * 0.7) + (answer_relevancy_score * 0.3)) * 100, 2)

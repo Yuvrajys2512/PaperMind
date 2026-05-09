@@ -2,12 +2,18 @@ from rank_bm25 import BM25Okapi
 import chromadb
 import os
 
+_bm25_cache: dict[str, tuple] = {}  # paper_name -> (BM25Okapi, chunks)
+
+
 def build_bm25_index(paper_name: str):
     """
     Loads all chunks stored in ChromaDB for a given paper,
     tokenizes their text, builds and returns a BM25 index
     along with the raw chunk data.
     """
+    if paper_name in _bm25_cache:
+        return _bm25_cache[paper_name]
+
     client = chromadb.PersistentClient(path="data/chroma_db")
     collection = client.get_collection(name=paper_name)
 
@@ -26,7 +32,16 @@ def build_bm25_index(paper_name: str):
         for i in range(len(documents))
     ]
 
+    _bm25_cache[paper_name] = (bm25, chunks)
     return bm25, chunks
+
+
+def invalidate_bm25_cache(paper_name: str = None):
+    """Call after re-ingesting a paper. Pass None to clear all cached indexes."""
+    if paper_name is None:
+        _bm25_cache.clear()
+    else:
+        _bm25_cache.pop(paper_name, None)
 
 
 def bm25_retrieve(query: str, paper_name: str, top_k: int = 5):

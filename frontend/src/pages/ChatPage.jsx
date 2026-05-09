@@ -31,6 +31,77 @@ function SourceChip({ source }) {
   )
 }
 
+function EvidenceGrading({ grading }) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (!grading || grading.grading_failed || !grading.grades?.length) return null
+
+  const sentences = grading.grades.filter(g => g.chunk_ref !== 'header')
+  const directCount = sentences.filter(g => g.grade === 'DIRECT').length
+  const inferredCount = sentences.filter(g => g.grade === 'INFERRED').length
+  const removedCount = grading.removed_count || 0
+
+  if (directCount === 0 && inferredCount === 0 && removedCount === 0) return null
+
+  return (
+    <div className="mt-6 pt-5 border-t border-white/5">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-[10px] uppercase tracking-[0.2em] text-gray-600 font-semibold">Evidence Quality</p>
+        {sentences.length > 0 && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-400 transition-colors font-bold"
+          >
+            {expanded ? 'Collapse' : 'Breakdown'}
+          </button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {directCount > 0 && (
+          <span className="flex items-center gap-1.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[9px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+            {directCount} Direct
+          </span>
+        )}
+        {inferredCount > 0 && (
+          <span className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[9px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            {inferredCount} Inferred
+          </span>
+        )}
+        {removedCount > 0 && (
+          <span className="flex items-center gap-1.5 bg-red-500/10 border border-red-500/20 text-red-400 text-[9px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+            {removedCount} Removed
+          </span>
+        )}
+      </div>
+
+      {expanded && sentences.length > 0 && (
+        <div className="mt-4 space-y-2.5">
+          {sentences.map((g, i) => {
+            const isRemoved = !g.kept
+            const isDirect = g.grade === 'DIRECT'
+            return (
+              <div key={i} className={`flex items-start gap-2 text-[11px] leading-relaxed ${isRemoved ? 'opacity-40' : ''}`}>
+                <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                  isDirect ? 'bg-cyan-400' : isRemoved ? 'bg-red-400' : 'bg-amber-400'
+                }`} />
+                <span className={`${
+                  isDirect ? 'text-gray-300' : isRemoved ? 'text-gray-500 line-through' : 'text-gray-400'
+                }`}>
+                  {g.sentence}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Message({ msg }) {
   const [isExpanded, setIsExpanded] = useState(false)
 
@@ -44,25 +115,21 @@ function Message({ msg }) {
     )
   }
 
-  const { answer, confidence, faithfulness, answer_relevancy, sources, attempts, warning } = msg.content
+  const { answer, confidence, faithfulness, answer_relevancy, sources, attempts, warning, grading } = msg.content
 
   // Parsing logic to split ESSENCE and DETAIL
+  // Handles both **DETAIL:** (ideal) and bare DETAIL (model variant)
   const parseAnswer = (text) => {
-    if (!text) return { essence: '', detail: '' };
-    const detailMarker = "**DETAIL:**"
-    const essenceMarker = "**ESSENCE:**"
-    
-    let essence = text;
-    let detail = "";
-    
-    if (text.includes(detailMarker)) {
-      const parts = text.split(detailMarker)
-      essence = parts[0].replace(essenceMarker, "").trim()
-      detail = parts[1].trim()
-    } else {
-      essence = text.replace(essenceMarker, "").trim()
+    if (!text) return { essence: '', detail: '' }
+    const stripEssence = (t) => t.replace(/^\*{0,2}ESSENCE:?\*{0,2}\s*/i, '').trim()
+    const detailRe = /\n\s*\*{0,2}DETAIL:?\*{0,2}\s*/i
+    const match = text.match(detailRe)
+    if (match) {
+      const essence = stripEssence(text.slice(0, match.index))
+      const detail = text.slice(match.index + match[0].length).trim()
+      return { essence, detail }
     }
-    return { essence, detail }
+    return { essence: stripEssence(text), detail: '' }
   }
 
   const { essence, detail } = parseAnswer(answer)
@@ -130,6 +197,8 @@ function Message({ msg }) {
             </div>
           )}
           
+          <EvidenceGrading grading={grading} />
+
           {attempts > 1 && (
             <div className="mt-4 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />

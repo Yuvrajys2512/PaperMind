@@ -167,20 +167,18 @@ def _format_answer_structure(steps: list) -> str:
 
 def _extract_reasoning_and_answer(full_response: str) -> tuple[str, str]:
     """
-    Splits the model's output into:
-      - reasoning_chain : everything up to and including [WRITE]
-      - answer          : everything after [WRITE]
-
-    Falls back gracefully if the model doesn't follow the expected format.
+    Splits the model's output into reasoning_chain and answer.
+    Handles both the canonical [WRITE] marker and the model's common
+    variant "STEP 2 — WRITE" (with em/en/hyphen dash variants).
     """
-    marker = "[WRITE]"
-    idx = full_response.find(marker)
-    if idx == -1:
-        return "", full_response.strip()
-
-    reasoning_chain = full_response[: idx + len(marker)].strip()
-    answer          = full_response[idx + len(marker) :].strip()
-    return reasoning_chain, answer
+    import re
+    pattern = re.compile(r'\[WRITE\]|STEP\s+\d+\s*[—\-–]+\s*WRITE', re.IGNORECASE)
+    m = pattern.search(full_response)
+    if m:
+        reasoning_chain = full_response[: m.end()].strip()
+        answer          = full_response[m.end() :].strip()
+        return reasoning_chain, answer
+    return "", full_response.strip()
 
 
 # ---------------------------------------------------------------------------

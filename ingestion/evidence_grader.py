@@ -166,19 +166,22 @@ Classify every sentence. Return only the JSON array."""
 # Answer reconstruction
 # ---------------------------------------------------------------------------
 
-def _reconstruct_answer(sentences: list[str], grades: list[dict]) -> tuple[str, list[dict]]:
+def _reconstruct_answer(original: str, sentences: list[str], grades: list[dict]) -> tuple[str, list[dict]]:
     """
-    Rebuilds the answer, dropping UNSUPPORTED sentences.
+    Removes UNSUPPORTED sentences from the original answer text directly,
+    preserving all newlines, section headers, and formatting.
     """
+    import re as _re
+
     grade_map: dict[str, str] = {}
     for g in grades:
         key = g.get("sentence", "")[:60].strip()
         grade_map[key] = g.get("grade", "INFERRED")
 
     enriched: list[dict] = []
-    kept_sentences: list[str] = []
+    to_remove: list[str] = []
 
-    for i, sent in enumerate(sentences):
+    for sent in sentences:
         key   = sent[:60].strip()
         grade = grade_map.get(key, "INFERRED")
 
@@ -189,8 +192,8 @@ def _reconstruct_answer(sentences: list[str], grades: list[dict]) -> tuple[str, 
                 break
 
         keep = grade != "UNSUPPORTED"
-        if keep:
-            kept_sentences.append(sent)
+        if not keep:
+            to_remove.append(sent)
 
         enriched.append({
             "sentence":  sent,
@@ -199,8 +202,16 @@ def _reconstruct_answer(sentences: list[str], grades: list[dict]) -> tuple[str, 
             "kept":      keep,
         })
 
-    cleaned_text = " ".join(kept_sentences)
-    return cleaned_text, enriched
+    # Remove UNSUPPORTED sentences in-place to preserve structure
+    cleaned = original
+    for sent in to_remove:
+        cleaned = cleaned.replace(sent, "")
+
+    cleaned = _re.sub(r'\n{3,}', '\n\n', cleaned)
+    cleaned = _re.sub(r'[ \t]{2,}', ' ', cleaned)
+    cleaned = cleaned.strip()
+
+    return cleaned, enriched
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +246,7 @@ def grade_answer(answer: str, chunks: list) -> dict:
             "grading_failed":  True,
         }
 
-    cleaned_text, enriched_grades = _reconstruct_answer(sentences, grades)
+    cleaned_text, enriched_grades = _reconstruct_answer(answer, sentences, grades)
     removed = sum(1 for g in enriched_grades if not g["kept"])
 
     print(

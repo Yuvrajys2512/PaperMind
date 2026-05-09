@@ -90,5 +90,8 @@ def embed_and_store(chunks: list, paper_name: str) -> None:
         documents=texts,
         metadatas=metadatas
     )
-    
+
+    from ingestion.bm25_retriever import invalidate_bm25_cache
+    invalidate_bm25_cache(paper_name)
+
     print(f"Stored {len(chunks)} chunks in collection '{paper_name}'")

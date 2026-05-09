@@ -1,9 +1,31 @@
-pdfplumber
-tiktoken
-pymupdf
-chromadb
-sentence-transformers
-rank-bm25
-ragas dataset
-fastapi
-uvicorn
+# PaperMind — direct runtime dependencies
+# Install inside your venv: pip install -r requirements.txt
+
+# PDF parsing
+pdfplumber>=0.11
+
+# Tokenization
+tiktoken>=0.12
+
+# Vector store
+chromadb>=1.5
+
+# Embeddings + reranking (pulls torch automatically)
+sentence-transformers>=5.0
+
+# BM25 retrieval
+rank-bm25>=0.2
+
+# API framework
+fastapi>=0.130
+uvicorn[standard]>=0.46
+python-multipart>=0.0.20
+
+# LLM providers (all accessed via OpenAI-compatible interface)
+openai>=2.0
+
+# Environment variable loading
+python-dotenv>=1.0
+
+# Numerical scoring (evaluator)
+numpy>=2.0

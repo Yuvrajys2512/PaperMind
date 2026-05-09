@@ -83,7 +83,7 @@ def route_query(query: str, paper_name: str) -> dict:
     # ── Step 2: resolve retrieval config from answer_type ─────────────────
     config = ANSWER_TYPE_CONFIG.get(plan["answer_type"], DEFAULT_CONFIG)
     print(
-        f"[router] Config → retrieval_k={config['retrieval_k']}, "
+        f"[router] Config -> retrieval_k={config['retrieval_k']}, "
         f"llm_k={config['llm_k']}"
     )
 
@@ -115,7 +115,7 @@ def route_query(query: str, paper_name: str) -> dict:
 
     # ── Step 4: rerank ────────────────────────────────────────────────────
     chunks = rerank(query, raw_chunks, top_k=config["llm_k"])
-    print(f"[router] {len(raw_chunks)} raw chunks → {len(chunks)} after rerank")
+    print(f"[router] {len(raw_chunks)} raw chunks -> {len(chunks)} after rerank")
 
     return {
         "query":  query,

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Yuvraj Srivastava\\\\Desktop\\\\Projects\\\\PaperMind\" -Force)",
+      "Bash(Select-Object -Property Name, Mode)",
+      "Bash(Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem *)",
+      "Bash(python -c ' *)",
+      "Bash(venv/Scripts/python -c ' *)",
+      "Bash(venv/Scripts/pip freeze *)",
+      "Bash(venv/Scripts/pip install *)",
+      "Bash(PYTHONIOENCODING=utf-8 venv/Scripts/python -c ' *)"
+    ]
+  }
+}

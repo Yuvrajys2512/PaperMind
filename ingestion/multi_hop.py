@@ -16,14 +16,9 @@ multi-hop request.  If sub_questions is None (e.g. direct callers,
 tests), the old decomposition behaviour is preserved as a fallback.
 """
 
-import os
 import json
-from groq import Groq
-from dotenv import load_dotenv
 from ingestion.hybrid_retriever import hybrid_retrieve
-
-load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+from ingestion.llm_client import chat_completion
 
 DECOMPOSE_SYSTEM_PROMPT = """You are a query decomposition assistant for a research paper Q&A system.
 
@@ -50,17 +45,14 @@ def decompose_query(query: str) -> list[str]:
     the query_router (i.e. legacy callers or direct test calls).
     """
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+        raw = chat_completion(
             messages=[
                 {"role": "system", "content": DECOMPOSE_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Question: {query}"}
             ],
             max_tokens=200,
-            temperature=0.1
+            temperature=0.1,
         )
-
-        raw = response.choices[0].message.content.strip()
 
         # Strip markdown code fences if present
         raw = raw.replace("```json", "").replace("```", "").strip()

@@ -1,4 +1,4 @@
-from ingestion.intent_detector import detect_intent
+from ingestion.query_planner import plan_query
 
 test_queries = [
     "Why did the authors choose to remove recurrence and convolution entirely in the Transformer?",
@@ -11,8 +11,8 @@ test_queries = [
     "Why does the decoder use masking in self-attention, and what would break without it?"
 ]
 
-print(f"{'Query':<55} {'Intent'}")
-print("-" * 70)
+print(f"{'Query':<55} {'Type':<20} {'Complexity'}")
+print("-" * 90)
 for q in test_queries:
-    intent = detect_intent(q)
-    print(q, intent)
+    plan = plan_query(q)
+    print(f"{q[:54]:<55} {plan['answer_type']:<20} {plan['complexity']}")

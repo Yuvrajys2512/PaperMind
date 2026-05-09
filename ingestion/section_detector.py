@@ -45,15 +45,10 @@
 
 
 import re
-import os
 from collections import Counter
-from dotenv import load_dotenv
-from groq import Groq
 
 from ingestion.pdf_parser import build_page_lines
-
-load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+from ingestion.llm_client import chat_completion
 
 def chars_to_text(chars: list) -> str:
     if not chars:
@@ -176,12 +171,11 @@ Rules:
 Candidates:
 {candidates_text}"""
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
+    raw = chat_completion(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=500,
+        temperature=0.0,
     )
-
-    raw = response.choices[0].message.content
 
     results = {}
     for line in raw.strip().split("\n"):

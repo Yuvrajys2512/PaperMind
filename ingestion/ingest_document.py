@@ -65,7 +65,7 @@ def ingest_document(pdf_path: str, paper_name: str) -> dict:
 
         # ── Step 4: Chunk ──────────────────────────────────────────────────
         print("[ingest] Chunking sections...")
-        chunks = chunk_sections(sections, chunk_size=400, overlap=50)
+        chunks = chunk_sections(sections, chunk_size=512, overlap=100)
         print(f"[ingest] {len(chunks)} chunks created")
 
         # ── Step 5: Embed and store ────────────────────────────────────────

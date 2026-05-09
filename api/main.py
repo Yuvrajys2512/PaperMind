@@ -1,5 +1,10 @@
+import sys
 import shutil
 from pydantic import BaseModel
+
+# Ensure Unicode LLM output never crashes the server on Windows
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from ingestion.pipeline import answer_query
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
