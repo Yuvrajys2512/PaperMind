@@ -9,7 +9,9 @@
       "Bash(venv/Scripts/python -c ' *)",
       "Bash(venv/Scripts/pip freeze *)",
       "Bash(venv/Scripts/pip install *)",
-      "Bash(PYTHONIOENCODING=utf-8 venv/Scripts/python -c ' *)"
+      "Bash(PYTHONIOENCODING=utf-8 venv/Scripts/python -c ' *)",
+      "Bash(node --input-type=module --eval ' *)",
+      "Bash(npm run *)"
     ]
   }
 }
