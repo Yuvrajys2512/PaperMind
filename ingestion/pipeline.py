@@ -21,11 +21,14 @@ answer_query(query, paper_name) -> dict
 
 from __future__ import annotations
 
-from ingestion.query_router    import route_query
-from ingestion.generator       import generate_answer
-from ingestion.evaluator       import evaluate_answer, compute_confidence
-from ingestion.retry_engine    import diagnose_failure, retry_query, MAX_ATTEMPTS
-from ingestion.evidence_grader import grade_answer
+from ingestion.query_router      import route_query
+from ingestion.generator         import generate_answer
+from ingestion.evaluator         import evaluate_answer, compute_confidence
+from ingestion.retry_engine      import diagnose_failure, retry_query, MAX_ATTEMPTS
+from ingestion.evidence_grader   import grade_answer
+from ingestion.compare_retriever import compare_retrieve
+from ingestion.reranker          import rerank
+from ingestion.query_planner     import plan_query
 
 CONFIDENCE_THRESHOLD = 50
 
@@ -34,7 +37,7 @@ CONFIDENCE_THRESHOLD = 50
 _OUT_OF_DOMAIN_RELEVANCY = 0.05
 
 
-def answer_query(query: str, paper_name: str) -> dict:
+def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
     """
     Run the full PaperMind pipeline:
 
@@ -75,6 +78,8 @@ def answer_query(query: str, paper_name: str) -> dict:
         # Skip retries if query is out-of-domain
         if out_of_domain and attempt > 1:
             break
+
+        req_tag = f"[{request_id}] " if request_id else ""
 
         try:
             # ── Step 1 & 2: Route + Generate ─────────────────────────────
@@ -135,7 +140,7 @@ def answer_query(query: str, paper_name: str) -> dict:
             )
 
             print(
-                f"[pipeline] Attempt {attempt}: confidence={confidence:.1f}  "
+                f"{req_tag}[pipeline] Attempt {attempt}: confidence={confidence:.1f}  "
                 f"faith={eval_scores['faithfulness']:.3f}  "
                 f"relev={eval_scores['answer_relevancy']:.3f}"
             )
@@ -228,3 +233,107 @@ def answer_query(query: str, paper_name: str) -> dict:
         best_result["failure_type"] = "out_of_domain" if out_of_domain else failure_type
 
     return best_result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session 7 — Multi-paper comparison
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
+    """
+    Run the pipeline for a two-paper comparison query.
+
+    Retrieves from both papers, injects a comparison-oriented plan,
+    and returns the same dict shape as answer_query with two extra keys:
+      is_comparison : True
+      paper_ids     : [paper_id_a, paper_id_b]
+    Sources include paper_label ("A"/"B") and paper_id per chunk.
+    """
+    _empty_grading = {"grades": [], "removed_count": 0, "grading_failed": True}
+
+    try:
+        plan = plan_query(query)
+        plan["answer_type"] = "comparison"
+        plan["answer_structure"] = [
+            "State how Paper A addresses the topic with supporting evidence",
+            "State how Paper B addresses the topic with supporting evidence",
+            "Highlight the key differences between the two papers",
+            "Note any agreements or common ground",
+        ]
+
+        raw_chunks = compare_retrieve(query, paper_id_a, paper_id_b, top_k=5)
+        if not raw_chunks:
+            raise RuntimeError("No chunks retrieved from either paper")
+
+        chunks = rerank(query, raw_chunks, top_k=min(10, len(raw_chunks)))
+
+        generated       = generate_answer(query=query, chunks=chunks, plan=plan)
+        raw_answer      = generated["answer"]
+        reasoning_chain = generated.get("reasoning_chain", "")
+
+        grading_result  = grade_answer(raw_answer, chunks)
+        answer          = grading_result["cleaned_answer"]
+
+        eval_scores = evaluate_answer(query, answer, chunks)
+        confidence  = compute_confidence(
+            eval_scores["faithfulness"], eval_scores["answer_relevancy"]
+        )
+
+        seen = set()
+        sources = []
+        for c in chunks:
+            key = (c["metadata"]["section"], c["metadata"]["page_num"])
+            if key not in seen:
+                seen.add(key)
+                sources.append({
+                    "section":      c["metadata"]["section"],
+                    "section_type": c["metadata"].get("section_type", "text"),
+                    "page":         c["metadata"]["page_num"],
+                    "chunk_index":  c["metadata"].get("chunk_index", 0),
+                    "paper_label":  c.get("paper_label", "?"),
+                    "paper_id":     c.get("paper_id", ""),
+                })
+
+        return {
+            "query":            query,
+            "answer":           answer,
+            "reasoning_chain":  reasoning_chain,
+            "confidence":       confidence,
+            "faithfulness":     eval_scores["faithfulness"],
+            "answer_relevancy": eval_scores["answer_relevancy"],
+            "attempts":         1,
+            "passed":           confidence >= CONFIDENCE_THRESHOLD,
+            "warning":          None,
+            "failure_type":     None,
+            "sources":          sources,
+            "query_used":       query,
+            "plan":             plan,
+            "grading": {
+                "grades":         grading_result["grades"],
+                "removed_count":  grading_result["removed_count"],
+                "grading_failed": grading_result["grading_failed"],
+            },
+            "is_comparison": True,
+            "paper_ids":     [paper_id_a, paper_id_b],
+        }
+
+    except Exception as e:
+        print(f"[compare] ERROR: {e}")
+        return {
+            "query":            query,
+            "answer":           "Unable to compare these papers. Please try again.",
+            "reasoning_chain":  "",
+            "confidence":       0.0,
+            "faithfulness":     0.0,
+            "answer_relevancy": 0.0,
+            "attempts":         1,
+            "passed":           False,
+            "warning":          str(e),
+            "failure_type":     "compare_error",
+            "sources":          [],
+            "query_used":       query,
+            "plan":             {},
+            "grading":          _empty_grading,
+            "is_comparison":    True,
+            "paper_ids":        [paper_id_a, paper_id_b],
+        }

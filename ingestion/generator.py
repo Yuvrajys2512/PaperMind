@@ -116,7 +116,8 @@ Now write the final answer using the ESSENCE + DETAIL format below.
 Sharp, direct, standalone — someone should grasp the core answer from this alone.
 
 **DETAIL:** Expand using ONLY what the context chunks explicitly state.
-Follow the answer_structure steps in order.
+Follow the answer_structure steps in order as a silent writing guide — do NOT print them as headers or label them (no "Step 1:", no bold titles).
+Write flowing prose that covers each step invisibly.
 Do not infer, connect, or editorialize beyond the source text.
 Every sentence must be traceable to a specific chunk.
 Maximum 2 paragraphs.
@@ -133,6 +134,7 @@ Maximum 2 paragraphs.
    - Format: [Section: <section_name>, Page: <page_num>]
    - Place citations at the END of the sentence they support.
    - Never stack multiple citations on one sentence.
+   - NEVER reference chunks by number in any form. Do not write "Chunk 1", "Chunk 5", "as described in Chunk 1", "according to Chunk 3", "in Chunk 6", or any variation. Always use [Section: <section_name>, Page: <page_num>].
 
 3. UNCERTAINTY — Be specific, never vague:
    - "This is not explicitly stated in the paper."
@@ -142,6 +144,11 @@ Maximum 2 paragraphs.
    Never say a generic "I don't know."
 
 4. Never fabricate facts, numbers, or claims not present in the context.
+
+5. ANSWER STRUCTURE STEPS are a private writing guide only.
+   Never print them as headers, numbered labels, or bold titles.
+   Correct: flowing prose that naturally covers each point.
+   Wrong: "Step 1: ..." / "Paper A:" / "Point 1:" as a visible header.
 
 5. Complete ALL six reasoning steps before writing the answer."""
 
@@ -163,6 +170,22 @@ def build_context_block(chunks: list) -> str:
 def _format_answer_structure(steps: list) -> str:
     """Converts answer_structure list into a numbered prompt block."""
     return "\n".join(f"  {i+1}. {step}" for i, step in enumerate(steps))
+
+
+def _strip_chunk_refs(text: str) -> str:
+    """Remove raw chunk-number references the model inserts despite instructions."""
+    import re
+    # "Chunk 1", "(Chunk 1)", "as described in Chunk 1,", "in Chunk 6", etc.
+    text = re.sub(r'\(\s*Chunk\s+\d+\s*\)', '', text, flags=re.IGNORECASE)
+    text = re.sub(
+        r'\b(as described in|according to|per|in|from|see)\s+Chunk\s+\d+\b[,]?',
+        '', text, flags=re.IGNORECASE
+    )
+    text = re.sub(r'\bChunk\s+\d+\b', '', text, flags=re.IGNORECASE)
+    # Clean up spacing artifacts
+    text = re.sub(r'  +', ' ', text)
+    text = re.sub(r'\s+([,\.])', r'\1', text)
+    return text.strip()
 
 
 def _extract_reasoning_and_answer(full_response: str) -> tuple[str, str]:
@@ -235,17 +258,19 @@ Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → 
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": user_prompt},
         ],
-        max_tokens=1024,
+        max_tokens=2048,
         temperature=0.1,
     )
 
     reasoning_chain, answer = _extract_reasoning_and_answer(full_output)
+    answer = _strip_chunk_refs(answer)
 
     sources = [
         {
-            "section":     c["metadata"]["section"],
-            "page":        c["metadata"]["page_num"],
-            "chunk_index": c["metadata"].get("chunk_index", 0),
+            "section":      c["metadata"]["section"],
+            "section_type": c["metadata"].get("section_type", "text"),
+            "page":         c["metadata"]["page_num"],
+            "chunk_index":  c["metadata"].get("chunk_index", 0),
         }
         for c in chunks
     ]

@@ -19,6 +19,7 @@ from ingestion.section_detector import (
     assemble_sections,
 )
 from ingestion.chunker import chunk_sections
+from ingestion.table_extractor import extract_tables_from_pdf
 
 
 def ingest_document(pdf_path: str, paper_name: str) -> dict:
@@ -67,6 +68,16 @@ def ingest_document(pdf_path: str, paper_name: str) -> dict:
         print("[ingest] Chunking sections...")
         chunks = chunk_sections(sections, chunk_size=512, overlap=100)
         print(f"[ingest] {len(chunks)} chunks created")
+
+        # ── Step 4.5: Extract tables ───────────────────────────────────────
+        print("[ingest] Extracting tables...")
+        table_chunks = extract_tables_from_pdf(pdf_path)
+        print(f"[ingest] {len(table_chunks)} table chunks extracted")
+        next_id = len(chunks) + 1
+        for i, tc in enumerate(table_chunks):
+            tc["chunk_id"] = next_id + i
+        chunks.extend(table_chunks)
+        print(f"[ingest] {len(chunks)} total chunks (text + tables)")
 
         # ── Step 5: Embed and store ────────────────────────────────────────
         print(f"[ingest] Embedding and storing into ChromaDB as '{paper_name}'...")

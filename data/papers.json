@@ -1,188 +1,4 @@
 {
-  "7ef91a7d-e1e3-4761-ae0a-da5e0944fbb5": {
-    "paper_id": "7ef91a7d-e1e3-4761-ae0a-da5e0944fbb5",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T09:04:47.771671",
-    "completed_at": "2026-05-02T09:04:47.788959",
-    "error": null
-  },
-  "019c24da-c1bb-4579-85e1-c120d20a0b91": {
-    "paper_id": "019c24da-c1bb-4579-85e1-c120d20a0b91",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T09:36:35.056378",
-    "completed_at": "2026-05-02T09:37:07.057956",
-    "error": null
-  },
-  "53abee7b-564b-49b5-bf70-656f24f92493": {
-    "paper_id": "53abee7b-564b-49b5-bf70-656f24f92493",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T09:36:37.968517",
-    "completed_at": "2026-05-02T09:37:06.984630",
-    "error": null
-  },
-  "7f44370d-28eb-48d3-a42f-847908463180": {
-    "paper_id": "7f44370d-28eb-48d3-a42f-847908463180",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T09:54:04.942395",
-    "completed_at": "2026-05-02T09:54:39.480012",
-    "error": null
-  },
-  "cb768902-5012-4f36-85e8-83eb20c939b8": {
-    "paper_id": "cb768902-5012-4f36-85e8-83eb20c939b8",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T10:16:17.089958",
-    "completed_at": "2026-05-02T10:16:59.781838",
-    "error": null
-  },
-  "f338979a-faff-4745-9632-8e48931a8a51": {
-    "paper_id": "f338979a-faff-4745-9632-8e48931a8a51",
-    "filename": "Retrieval-Augmented Generation for.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T10:23:41.237460",
-    "completed_at": "2026-05-02T10:24:20.360971",
-    "error": null
-  },
-  "15099f2e-c38c-455d-a4b1-a8357b3d284b": {
-    "paper_id": "15099f2e-c38c-455d-a4b1-a8357b3d284b",
-    "filename": "Language Models are Few-Shot Learners.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T18:29:19.334912",
-    "completed_at": "2026-05-02T18:30:26.312543",
-    "error": null
-  },
-  "acaabf2e-4d8e-48eb-82a9-8efcbc4b49b4": {
-    "paper_id": "acaabf2e-4d8e-48eb-82a9-8efcbc4b49b4",
-    "filename": "Chain-of-Thought Prompting Elicits Reasoning.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T18:35:29.791975",
-    "completed_at": "2026-05-02T18:36:43.511976",
-    "error": null
-  },
-  "9e933c6a-e8bb-4c1e-b769-418c9f7835a5": {
-    "paper_id": "9e933c6a-e8bb-4c1e-b769-418c9f7835a5",
-    "filename": "Retrieval-Augmented Generation for.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T18:44:52.565469",
-    "completed_at": "2026-05-02T18:45:33.543414",
-    "error": null
-  },
-  "90326e90-e073-4dd8-ba97-bf1821215394": {
-    "paper_id": "90326e90-e073-4dd8-ba97-bf1821215394",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-02T19:06:26.819809",
-    "completed_at": "2026-05-02T19:07:44.313440",
-    "error": null
-  },
-  "c3ef7a13-e675-4478-9a8e-c4503d9b44da": {
-    "paper_id": "c3ef7a13-e675-4478-9a8e-c4503d9b44da",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-03T19:28:49.641631",
-    "completed_at": "2026-05-03T19:29:27.882701",
-    "error": null
-  },
-  "14857b86-9a0a-49fc-88ff-34f3f25c15da": {
-    "paper_id": "14857b86-9a0a-49fc-88ff-34f3f25c15da",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-03T19:44:31.019407",
-    "completed_at": "2026-05-03T19:44:55.748839",
-    "error": null
-  },
-  "b1463f9e-44e8-4386-b2d9-023d08fcb68d": {
-    "paper_id": "b1463f9e-44e8-4386-b2d9-023d08fcb68d",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-03T20:05:12.481519",
-    "completed_at": "2026-05-03T20:06:01.858168",
-    "error": null
-  },
-  "65a6835b-173d-4ea1-a679-d667c4cfaf17": {
-    "paper_id": "65a6835b-173d-4ea1-a679-d667c4cfaf17",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-04T21:23:51.988723",
-    "completed_at": "2026-05-04T21:23:51.998585",
-    "error": null
-  },
-  "b657056b-6504-4494-93c1-d6a05e7c26cd": {
-    "paper_id": "b657056b-6504-4494-93c1-d6a05e7c26cd",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-04T21:32:00.269284",
-    "completed_at": "2026-05-04T21:32:00.286665",
-    "error": null
-  },
-  "cf58e268-7d62-42af-a420-0fd1bbe2c219": {
-    "paper_id": "cf58e268-7d62-42af-a420-0fd1bbe2c219",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-04T21:37:33.241016",
-    "completed_at": "2026-05-04T21:37:33.264611",
-    "error": null
-  },
-  "f6b0359c-031d-4cb4-b5a7-6b5d3165ea31": {
-    "paper_id": "f6b0359c-031d-4cb4-b5a7-6b5d3165ea31",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-05T11:19:32.120632",
-    "completed_at": "2026-05-05T11:19:32.133295",
-    "error": null
-  },
-  "d4351295-49f3-481b-bd84-78d534f21a26": {
-    "paper_id": "d4351295-49f3-481b-bd84-78d534f21a26",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-05T11:43:30.117620",
-    "completed_at": "2026-05-05T11:43:30.129203",
-    "error": null
-  },
-  "03b855c8-5595-4aab-bed3-66fd04024778": {
-    "paper_id": "03b855c8-5595-4aab-bed3-66fd04024778",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-05T11:53:43.911284",
-    "completed_at": "2026-05-05T11:53:43.922486",
-    "error": null
-  },
-  "d1ce827d-8ddc-4d29-9451-547268b5dd7c": {
-    "paper_id": "d1ce827d-8ddc-4d29-9451-547268b5dd7c",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-05T12:09:31.523036",
-    "completed_at": "2026-05-05T12:09:31.536442",
-    "error": null
-  },
-  "ff7e0906-8bc8-4e48-98f3-08fd5657e39a": {
-    "paper_id": "ff7e0906-8bc8-4e48-98f3-08fd5657e39a",
-    "filename": "attention_is_all_you_need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-05T12:21:19.350249",
-    "completed_at": "2026-05-05T12:21:19.363099",
-    "error": null
-  },
-  "bbc1428c-320c-4d4d-8d5d-f622e3860dfe": {
-    "paper_id": "bbc1428c-320c-4d4d-8d5d-f622e3860dfe",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-05T12:28:32.951558",
-    "completed_at": "2026-05-05T12:29:14.114243",
-    "error": null
-  },
-  "5d4e75f5-0fa6-4c12-b4e0-88c1a5b60ec4": {
-    "paper_id": "5d4e75f5-0fa6-4c12-b4e0-88c1a5b60ec4",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-05T19:47:45.483961",
-    "completed_at": "2026-05-05T19:48:24.054825",
-    "error": null
-  },
   "1164e99b-430d-41d5-92c7-9002f831ac7f": {
     "paper_id": "1164e99b-430d-41d5-92c7-9002f831ac7f",
     "filename": "paper_0.pdf",
@@ -223,36 +39,28 @@
     "completed_at": null,
     "error": null
   },
-  "22f84423-4272-483e-9d03-e47fde07456c": {
-    "paper_id": "22f84423-4272-483e-9d03-e47fde07456c",
+  "2d4db181-855d-4745-bfb5-8bd17f977aeb": {
+    "paper_id": "2d4db181-855d-4745-bfb5-8bd17f977aeb",
     "filename": "Attention is all you need.pdf",
     "status": "ready",
-    "uploaded_at": "2026-05-09T20:03:31.338937",
-    "completed_at": "2026-05-09T20:03:59.061687",
+    "uploaded_at": "2026-05-11T11:37:57.087977",
+    "completed_at": "2026-05-11T11:38:30.202369",
     "error": null
   },
-  "0cc192d6-d277-4b3d-8a9a-f32cbdfdb076": {
-    "paper_id": "0cc192d6-d277-4b3d-8a9a-f32cbdfdb076",
+  "b02f541e-571d-44c5-a8e5-a8c5203ff548": {
+    "paper_id": "b02f541e-571d-44c5-a8e5-a8c5203ff548",
     "filename": "Attention is all you need.pdf",
     "status": "ready",
-    "uploaded_at": "2026-05-09T20:22:17.502370",
-    "completed_at": "2026-05-09T20:22:49.278787",
+    "uploaded_at": "2026-05-11T11:41:17.790961",
+    "completed_at": "2026-05-11T11:42:18.945840",
     "error": null
   },
-  "3db7c60d-48d7-4f6b-ae15-74f36351a2f3": {
-    "paper_id": "3db7c60d-48d7-4f6b-ae15-74f36351a2f3",
-    "filename": "Attention is all you need.pdf",
+  "362178d5-148a-4cdd-9a74-8bef4e2379c4": {
+    "paper_id": "362178d5-148a-4cdd-9a74-8bef4e2379c4",
+    "filename": "NEURAL MACHINE TRANSLATION.pdf",
     "status": "ready",
-    "uploaded_at": "2026-05-09T20:25:12.228449",
-    "completed_at": "2026-05-09T20:26:00.177231",
-    "error": null
-  },
-  "06f31b6f-6044-4bd1-a8d7-7ce2040debeb": {
-    "paper_id": "06f31b6f-6044-4bd1-a8d7-7ce2040debeb",
-    "filename": "Attention is all you need.pdf",
-    "status": "ready",
-    "uploaded_at": "2026-05-09T20:59:41.516687",
-    "completed_at": "2026-05-09T21:00:34.727337",
+    "uploaded_at": "2026-05-11T11:42:35.968113",
+    "completed_at": "2026-05-11T11:43:09.359703",
     "error": null
   }
 }

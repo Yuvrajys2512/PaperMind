@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { queryPaper, listPapers } from '../api'
+import { queryPaper, listPapers, comparePapers, deletePaper } from '../api'
 import ReactMarkdown from 'react-markdown'
 
 /* ─────────────────────────────────────────────────────────────────
@@ -107,11 +107,27 @@ function SparkLine({ confidence }) {
    SOURCE CHIP
 ───────────────────────────────────────────────────────────────── */
 function SourceChip({ source }) {
-  const isTable = source.section_type === 'table'
+  const isTable     = source.section_type === 'table'
+  const paperLabel  = source.paper_label   // "A", "B", or undefined
+
+  const labelBadge = paperLabel ? (
+    <span
+      className="text-[8px] font-bold px-1.5 py-0.5 rounded-full"
+      style={{
+        background: paperLabel === 'A' ? 'rgba(0,245,255,0.15)' : 'rgba(139,92,246,0.15)',
+        color:      paperLabel === 'A' ? 'rgba(0,245,255,0.9)'  : 'rgba(167,139,250,0.9)',
+        border:     paperLabel === 'A' ? '1px solid rgba(0,245,255,0.25)' : '1px solid rgba(139,92,246,0.25)',
+      }}
+    >
+      {paperLabel}
+    </span>
+  ) : null
+
   if (isTable) {
     return (
       <div className="group flex items-center gap-2 bg-violet-500/10 hover:bg-violet-500/18 border border-violet-500/25 hover:border-violet-400/40 text-violet-300 hover:text-violet-200 text-[10px] px-3 py-1.5 rounded-full transition-all cursor-default"
         style={{ fontFamily: 'var(--font-mono)' }}>
+        {labelBadge}
         <span className="w-1 h-1 rounded-full bg-violet-400" style={{ filter: 'drop-shadow(0 0 3px rgba(167,139,250,0.8))' }} />
         TABLE · {source.section} <span className="opacity-30">·</span> p.{source.page}
       </div>
@@ -120,6 +136,7 @@ function SourceChip({ source }) {
   return (
     <div className="group flex items-center gap-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] hover:border-cyan-500/25 text-gray-500 hover:text-cyan-300 text-[10px] px-3 py-1.5 rounded-full transition-all cursor-default"
       style={{ fontFamily: 'var(--font-mono)' }}>
+      {labelBadge}
       <span className="w-1 h-1 rounded-full bg-cyan-500/60 group-hover:bg-cyan-400 transition-colors" />
       {source.section} <span className="opacity-30">·</span> p.{source.page}
     </div>
@@ -208,7 +225,7 @@ function EvidenceGrading({ grading }) {
 /* ─────────────────────────────────────────────────────────────────
    TELEMETRY PANEL
 ───────────────────────────────────────────────────────────────── */
-function TelemetryPanel({ confidence, attempts, plan }) {
+function TelemetryPanel({ confidence, attempts, plan, requestId }) {
   const stages = useMemo(() => {
     const base = confidence || 50
     const seed = [
@@ -223,10 +240,11 @@ function TelemetryPanel({ confidence, attempts, plan }) {
     return { stages: seed, total }
   }, [confidence])
 
-  const reqId = useMemo(() => {
+  const computedReqId = useMemo(() => {
     const n = Math.round((confidence || 50) * 1234567.89)
     return 'REQ-' + String(n).padStart(8, '0')
   }, [confidence])
+  const reqId = requestId ? requestId.toUpperCase() : computedReqId
 
   const maxMs = Math.max(...stages.stages.map(s => s.ms))
 
@@ -283,7 +301,7 @@ function Message({ msg }) {
     )
   }
 
-  const { answer, confidence, faithfulness, answer_relevancy, sources, attempts, warning, grading, plan } = msg.content
+  const { answer, confidence, faithfulness, answer_relevancy, sources, attempts, warning, grading, plan, is_comparison, request_id } = msg.content
 
   const parseAnswer = (text) => {
     if (!text) return { essence: '', detail: '' }
@@ -312,8 +330,21 @@ function Message({ msg }) {
           />
 
           {/* Answer type badge row */}
-          {(plan?.answer_type || plan?.complexity === 'multi_hop') && (
+          {(is_comparison || plan?.answer_type || plan?.complexity === 'multi_hop') && (
             <div className="flex items-center gap-2 mb-4">
+              {is_comparison && (
+                <span
+                  className="text-[8px] font-bold uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(0,245,255,0.08), rgba(139,92,246,0.08))',
+                    border: '1px solid rgba(139,92,246,0.3)',
+                    color: 'rgba(167,139,250,0.9)',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  A vs B
+                </span>
+              )}
               {plan?.answer_type && (
                 <span
                   className="text-[8px] font-bold uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
@@ -458,7 +489,7 @@ function Message({ msg }) {
 
         {/* ── Telemetry panel ── */}
         {showTrace && (
-          <TelemetryPanel confidence={confidence} attempts={attempts} plan={plan} />
+          <TelemetryPanel confidence={confidence} attempts={attempts} plan={plan} requestId={request_id} />
         )}
 
         {/* ── Warning banner ── */}
@@ -509,6 +540,18 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     setShowSwitcher(false)
   }
 
+  const handleDelete = async (e, p) => {
+    e.stopPropagation()
+    if (!window.confirm(`Delete "${p.filename}"?`)) return
+    try {
+      await deletePaper(p.paper_id)
+      setPapers(prev => prev.filter(x => x.paper_id !== p.paper_id))
+      if (comparePaper2?.paper_id === p.paper_id) setComparePaper2(null)
+    } catch {
+      // silently ignore — paper may already be gone
+    }
+  }
+
   const handleSend = async () => {
     const question = input.trim()
     if (!question || loading) return
@@ -520,7 +563,9 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     }))
     setLoading(true)
     try {
-      const result = await queryPaper(paperId, question)
+      const result = (compareMode && comparePaper2)
+        ? await comparePapers(paperId, comparePaper2.paper_id, question)
+        : await queryPaper(paperId, question)
       setAllMessages(prev => ({
         ...prev,
         [paperId]: [...(prev[paperId] || []), { role: 'assistant', content: result }],
@@ -597,6 +642,16 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
 
           {/* Right — status + upload */}
           <div className="flex items-center gap-5">
+            {compareMode && comparePaper2 && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl"
+                style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.25)' }}>
+                <span className="w-1.5 h-1.5 rounded-full bg-violet-400"
+                  style={{ boxShadow: '0 0 6px rgba(139,92,246,0.7)' }} />
+                <span className="text-[10px] text-violet-400/80 font-semibold uppercase tracking-wider">
+                  Compare · {comparePaper2.filename.slice(0, 18)}
+                </span>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
                 style={{ boxShadow: '0 0 6px rgba(52,211,153,0.7)' }} />
@@ -656,7 +711,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                     <button
                       key={p.paper_id}
                       onClick={() => switchToPaper(p)}
-                      className="text-left px-5 py-4 rounded-2xl transition-all border"
+                      className="group text-left px-5 py-4 rounded-2xl transition-all border"
                       style={{
                         background: p.paper_id === paper.paper_id ? 'rgba(0,245,255,0.05)' : 'rgba(255,255,255,0.03)',
                         borderColor: p.paper_id === paper.paper_id ? 'rgba(0,245,255,0.25)' : 'rgba(255,255,255,0.05)',
@@ -665,10 +720,19 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-medium truncate pr-3">{p.filename}</span>
-                        {p.paper_id === paper.paper_id && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 flex-shrink-0"
-                            style={{ boxShadow: '0 0 6px rgba(0,245,255,0.7)' }} />
-                        )}
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {p.paper_id === paper.paper_id && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"
+                              style={{ boxShadow: '0 0 6px rgba(0,245,255,0.7)' }} />
+                          )}
+                          <button
+                            onClick={(e) => handleDelete(e, p)}
+                            className="w-5 h-5 rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/20 hover:text-red-400 text-gray-600"
+                            title="Delete paper"
+                          >
+                            ×
+                          </button>
+                        </div>
                       </div>
                     </button>
                   ))}
@@ -704,7 +768,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                         {readyPapers.map(p => (
                           <button
                             key={p.paper_id}
-                            onClick={() => setComparePaper2(p)}
+                            onClick={() => { setComparePaper2(p); setShowSwitcher(false) }}
                             className="w-full text-left px-4 py-2.5 rounded-xl transition-all text-xs"
                             style={{
                               background: comparePaper2?.paper_id === p.paper_id ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.03)',
@@ -719,11 +783,22 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                     </div>
                   </div>
 
-                  <div className="flex justify-center mt-2">
-                    <button disabled className="compare-cta">
-                      Compare — Coming Soon (Session 7)
-                    </button>
-                  </div>
+                  {comparePaper2 && (
+                    <div className="flex justify-center mt-2">
+                      <button
+                        onClick={() => setShowSwitcher(false)}
+                        className="compare-cta"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(139,92,246,0.3), rgba(0,245,255,0.15))',
+                          border: '1px solid rgba(139,92,246,0.4)',
+                          color: '#e9d5ff',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Compare · {paper.filename.slice(0, 20)} vs {comparePaper2.filename.slice(0, 20)}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

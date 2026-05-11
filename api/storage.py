@@ -72,3 +72,14 @@ def list_papers() -> list:
 def get_paper_pdf_path(paper_id: str) -> Path:
     """Returns the path where a paper's PDF is/should be stored."""
     return PAPERS_DIR / f"{paper_id}.pdf"
+
+
+def delete_paper_record(paper_id: str) -> bool:
+    """Removes a paper from the registry. Returns True if it existed."""
+    with _registry_lock:
+        registry = _load_registry()
+        if paper_id not in registry:
+            return False
+        del registry[paper_id]
+        _save_registry(registry)
+    return True

@@ -29,3 +29,19 @@ export async function listPapers() {
   if (!res.ok) throw new Error('Failed to fetch papers')
   return res.json()
 }
+
+export async function deletePaper(paperId) {
+  const res = await fetch(`${BASE}/papers/${paperId}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('Delete failed')
+  return res.json()
+}
+
+export async function comparePapers(paperIdA, paperIdB, question) {
+  const res = await fetch(`${BASE}/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paper_ids: [paperIdA, paperIdB], question })
+  })
+  if (!res.ok) throw new Error('Compare failed')
+  return res.json()
+}

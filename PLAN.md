@@ -76,51 +76,53 @@
 
 ---
 
-## SESSION 5 — Table Extraction — NEW FEATURE
+## SESSION 5 — Table Extraction — NEW FEATURE ✅
 
 **Goal:** Tables in PDFs become queryable chunks, not silent gaps in coverage.
 
-**What we build:**
-- `ingestion/table_extractor.py` — New module using `pdfplumber`'s `page.extract_tables()`, converts each table to markdown-style text (`| col | col |` format)
-- `ingestion/ingest_document.py` — Integrate table extraction after text extraction; table chunks stored with `section_type: "table"`, `section: "Table N (page P)"`
+**What was built:**
+- `ingestion/table_extractor.py` — New module using `pdfplumber`'s `page.extract_tables()`, converts each table to markdown-style text (`| col | col |` format); skips noise (< 2 rows or columns)
+- `ingestion/ingest_document.py` — Integrates table extraction after chunking (step 4.5); table chunks appended with `section_type: "table"`, `section: "Table N (page P)"`
+- `ingestion/generator.py` — Added `section_type` to sources dict so frontend's violet table chips render correctly
 
 **Verifiable outputs:**
 1. Ingesting "Attention Is All You Need" produces ≥ 3 chunks with `section_type: "table"`
 2. Querying "What hardware was used for training?" returns table content (P100 GPUs, WMT 2014)
-3. Table chunks appear in source chips with `section_type: "table"`
+3. Table chunks appear in source chips with violet styling
 
 ---
 
-## SESSION 6 — Structured Logging + Request Tracing — INFRASTRUCTURE
+## SESSION 6 — Structured Logging + Request Tracing — INFRASTRUCTURE ✅
 
 **Goal:** Every query is observable — request ID, timing breakdown, and confidence in a single log line.
 
-**What we build:**
-- `api/logger.py` — Structured logger with request ID generation
-- `api/main.py` — Instrument `/query` endpoint: log `[req_id] paper=... question=... duration=...ms confidence=...`; add 60-second timeout so hung requests return 504 instead of hanging forever
-- `ingestion/pipeline.py` — Accept optional `request_id` for per-attempt logging
+**What was built:**
+- `api/logger.py` — `generate_request_id()` (8-char hex UUID) + `log_query()` structured log line
+- `api/main.py` — `/query` made async; logs `[req_id] PASS/FAIL paper=... query="..." duration=...ms confidence=... attempts=...`; 60-second timeout (504 on hang); `request_id` included in response JSON
+- `ingestion/pipeline.py` — `answer_query()` accepts optional `request_id`; prefixes per-attempt log lines with `[req_id]`
 
 **Verifiable outputs:**
-1. Log line: `[abc123] query="How does attention work?" paper=xyz duration=7420ms confidence=68.5 attempts=1`
+1. Log line: `[abc12345] PASS paper=xyz12345 query="How does attention work?" duration=7420ms confidence=68.5 attempts=1`
 2. Two concurrent queries produce two different `req_id` values in logs
 3. A query that hangs returns HTTP 504 after 60 seconds
 
 ---
 
-## SESSION 7 — Multi-paper Comparison — NEW FEATURE
+## SESSION 7 — Multi-paper Comparison — NEW FEATURE ✅
 
 **Goal:** Users can ask one question across two papers simultaneously and get a structured comparison answer.
 
-**What we build:**
-- `api/main.py` — Extend `POST /query` to accept optional `paper_ids: list[str]` (up to 2)
-- `ingestion/retriever.py` + `ingestion/hybrid_retriever.py` — Merge results from multiple ChromaDB collections, tag each chunk with its source paper
-- `ingestion/query_planner.py` — When 2 papers are supplied, generate comparison-oriented `answer_structure`
-- `frontend/src/pages/ChatPage.jsx` — "Compare" mode in workspace switcher: select two papers, submit multi-paper query
+**What was built:**
+- `ingestion/compare_retriever.py` — New module; `compare_retrieve()` retrieves from both ChromaDB collections, tags chunks with `paper_label: "A"/"B"` and `paper_id`, interleaves results
+- `ingestion/pipeline.py` — `compare_papers(query, paper_id_a, paper_id_b)` function; forces `answer_type: "comparison"` plan; sources include `paper_label` and `paper_id`
+- `api/main.py` — `POST /query` accepts `paper_ids: list[str]` (2 entries = comparison); validates both papers; 120-second timeout for comparisons
+- `frontend/src/api.js` — `comparePapers(paperIdA, paperIdB, question)` exported
+- `frontend/src/pages/ChatPage.jsx` — `handleSend` calls `comparePapers` when `compareMode && comparePaper2`; Paper B selection auto-closes switcher; "A vs B" badge on comparison answers; A/B paper label chips on sources; compare mode indicator in header
 
 **Verifiable outputs:**
 1. `POST /query {"paper_ids": ["id1", "id2"], "question": "..."}` returns an answer referencing both papers
-2. Sources list shows chunks from both papers with distinct paper labels
-3. Frontend "Compare" mode lets you select two papers and submits the multi-paper query
+2. Sources list shows chunks from both papers with cyan "A" / violet "B" label badges
+3. Frontend "Compare" mode lets you select two papers; sends and renders multi-paper comparison
 
 ---
 
@@ -132,6 +134,50 @@
 | 2 | Dependencies + Storage | CRITICAL FIX | ✅ Done |
 | 3 | Pipeline Efficiency | QUALITY IMPROVEMENT | ✅ Done |
 | 4 | Evidence Grading UI | NEW FEATURE | ✅ Done |
-| 5 | Table Extraction | NEW FEATURE | ⬜ |
-| 6 | Structured Logging | INFRASTRUCTURE | ⬜ |
-| 7 | Multi-paper Comparison | NEW FEATURE | ⬜ |
+| 5 | Table Extraction | NEW FEATURE | ✅ Done |
+| 6 | Structured Logging | INFRASTRUCTURE | ✅ Done |
+| 7 | Multi-paper Comparison | NEW FEATURE | ✅ Done |
+
+
+future work
+What's actually missing (the real gaps):
+
+  Gap: End-to-end eval set
+  What's needed: 200–500 Q&A pairs with ground-truth answers, not just section/page hits
+  Effort: High — this is the core work
+  ────────────────────────────────────────
+  Gap: Answer correctness metric
+  What's needed: Script that scores pipeline answer vs. ground-truth string (exact match, F1, LLM-as-judge)
+  Effort: Medium
+  ────────────────────────────────────────
+  Gap: Baseline comparison
+  What's needed: Run same questions through vanilla RAG, raw Claude — log delta
+  Effort: Medium
+  ────────────────────────────────────────
+  Gap: Domain focus
+  What's needed: Either target FinanceBench (10-Ks) or build your own domain eval
+  Effort: High
+  ────────────────────────────────────────
+  Gap: Citation verification
+  What's needed: Check that kept sentences actually have [Section:...] tags, not just that unsupported ones are removed 
+  Effort: Low
+
+  Bottom line: You have the hardest infrastructure built (evidence grading, retrieval, CoT). What's missing is the eval 
+  dataset + a harness to run it end-to-end and produce a number. That's 70% of what makes this "top-1% skill" — the     
+  infrastructure is table stakes.
+
+  The two realistic paths:
+  1. FinanceBench route — ingest SEC 10-Ks, run against 150 public questions, compare your pipeline vs. vanilla RAG     
+  2. Build your own — pick a domain (ML papers, medical abstracts), write 200+ Q&A pairs yourself, run your pipeline vs.
+  ────────────────────────────────────────
+  Gap: Domain focus
+  What's needed: Either target FinanceBench (10-Ks) or build your own domain eval
+  Effort: High
+  ────────────────────────────────────────
+  Gap: Citation verification
+  What's needed: Check that kept sentences actually have [Section:...] tags, not just that unsupported ones are removed 
+  Effort: Low
+
+  Bottom line: You have the hardest infrastructure built (evidence grading, retrieval, CoT). What's missing is the eval 
+  dataset + a harness to run it end-to-end and produce a number. That's 70% of what makes this "top-1% skill" — the     
+  infrastructure is table stakes.

@@ -209,7 +209,14 @@ def _reconstruct_answer(original: str, sentences: list[str], grades: list[dict])
 
     cleaned = _re.sub(r'\n{3,}', '\n\n', cleaned)
     cleaned = _re.sub(r'[ \t]{2,}', ' ', cleaned)
-    cleaned = cleaned.strip()
+
+    # Remove orphaned fragments — lines left with ≤ 2 words after removal
+    lines = cleaned.split('\n')
+    lines = [
+        ln for ln in lines
+        if len(ln.strip().split()) > 2 or not ln.strip()
+    ]
+    cleaned = '\n'.join(lines).strip()
 
     return cleaned, enriched
 
