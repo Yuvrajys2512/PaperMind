@@ -1,7 +1,8 @@
 import json
+import os
 import uuid
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 PAPERS_DIR = Path("data/papers")
@@ -23,7 +24,11 @@ def _load_registry() -> dict:
 
 
 def _save_registry(registry: dict):
-    REGISTRY_FILE.write_text(json.dumps(registry, indent=2))
+    # Atomic write: a crash mid-write would otherwise leave papers.json
+    # half-flushed and unparseable on the next read.
+    tmp = REGISTRY_FILE.with_suffix(REGISTRY_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(registry, indent=2))
+    os.replace(tmp, REGISTRY_FILE)
 
 
 def create_paper_record(original_filename: str) -> str:
@@ -35,7 +40,7 @@ def create_paper_record(original_filename: str) -> str:
             "paper_id": paper_id,
             "filename": original_filename,
             "status": "processing",
-            "uploaded_at": datetime.utcnow().isoformat(),
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None,
             "error": None,
         }
@@ -51,7 +56,7 @@ def update_paper_status(paper_id: str, status: str, error: str = None):
             return
         registry[paper_id]["status"] = status
         if status == "ready":
-            registry[paper_id]["completed_at"] = datetime.utcnow().isoformat()
+            registry[paper_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         if error:
             registry[paper_id]["error"] = error
         _save_registry(registry)

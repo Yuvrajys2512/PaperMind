@@ -22,6 +22,7 @@ from api.storage import (
 )
 from api.logger import generate_request_id, log_query
 from ingestion.ingest_document import ingest_document
+from ingestion.bm25_retriever  import invalidate_bm25_cache
 
 app = FastAPI(
     title="PaperMind API",
@@ -106,8 +107,17 @@ def delete_paper(paper_id: str):
             c if c.isalnum() or c == "-" else "-" for c in paper_id
         ).strip("-").lower()
         chroma.delete_collection(name=clean_name)
-    except Exception:
-        pass  # collection may not exist if ingestion never completed
+    except Exception as exc:
+        # The collection may legitimately be missing (ingestion never
+        # completed) — log it so a real failure is still visible.
+        print(f"[delete] Chroma collection drop skipped for {paper_id}: {exc}")
+
+    # Invalidate the BM25 cache so a re-ingest of the same paper_id
+    # doesn't serve stale tokens.
+    try:
+        invalidate_bm25_cache(paper_id)
+    except Exception as exc:
+        print(f"[delete] BM25 cache invalidation failed for {paper_id}: {exc}")
 
     return {"deleted": paper_id}
 
@@ -121,7 +131,7 @@ class QueryRequest(BaseModel):
 @app.post("/query")
 async def query_paper(request: QueryRequest):
     req_id = generate_request_id()
-    loop   = asyncio.get_event_loop()
+    loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
 
     # ── Multi-paper comparison ────────────────────────────────────────────
@@ -152,6 +162,8 @@ async def query_paper(request: QueryRequest):
             confidence=result.get("confidence", 0),
             attempts=result.get("attempts", 1),
             passed=result.get("passed", False),
+            llm_calls=result.get("llm_calls", 0),
+            providers=result.get("providers_used", []),
         )
         result["request_id"] = req_id
         return result
@@ -187,6 +199,8 @@ async def query_paper(request: QueryRequest):
         confidence=result.get("confidence", 0),
         attempts=result.get("attempts", 1),
         passed=result.get("passed", False),
+        llm_calls=result.get("llm_calls", 0),
+        providers=result.get("providers_used", []),
     )
     result["request_id"] = req_id
     return result

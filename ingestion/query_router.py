@@ -18,10 +18,16 @@ The returned dict now carries "plan" instead of "intents" so generator.py
 can consume the full plan (including answer_structure).
 """
 
+import os
+
 from ingestion.query_planner    import plan_query
 from ingestion.hybrid_retriever import hybrid_retrieve
 from ingestion.reranker         import rerank
 from ingestion.multi_hop        import multi_hop_retrieve
+
+# When set, skip CrossEncoder reranking entirely and take the top llm_k
+# chunks by raw retrieval rank. Used for Phase 6 "no-rerank" ablation.
+_DISABLE_RERANK = os.getenv("PAPERMIND_DISABLE_RERANK", "").lower() in ("1", "true", "yes")
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +120,15 @@ def route_query(query: str, paper_name: str) -> dict:
         )
 
     # ── Step 4: rerank ────────────────────────────────────────────────────
-    chunks = rerank(query, raw_chunks, top_k=config["llm_k"])
-    print(f"[router] {len(raw_chunks)} raw chunks -> {len(chunks)} after rerank")
+    if _DISABLE_RERANK:
+        chunks = raw_chunks[: config["llm_k"]]
+        print(
+            f"[router] Reranker DISABLED via env -> taking top "
+            f"{len(chunks)} of {len(raw_chunks)} chunks by retrieval rank"
+        )
+    else:
+        chunks = rerank(query, raw_chunks, top_k=config["llm_k"])
+        print(f"[router] {len(raw_chunks)} raw chunks -> {len(chunks)} after rerank")
 
     return {
         "query":  query,

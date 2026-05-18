@@ -21,6 +21,10 @@ answer_query(query, paper_name) -> dict
 
 from __future__ import annotations
 
+import os
+import time
+import traceback
+
 from ingestion.query_router      import route_query
 from ingestion.generator         import generate_answer
 from ingestion.evaluator         import evaluate_answer, compute_confidence
@@ -29,12 +33,17 @@ from ingestion.evidence_grader   import grade_answer
 from ingestion.compare_retriever import compare_retrieve
 from ingestion.reranker          import rerank
 from ingestion.query_planner     import plan_query
+from ingestion.llm_client        import reset_stats, get_stats
 
 CONFIDENCE_THRESHOLD = 50
 
 # If attempt 1 answer_relevancy is below this, the query is out-of-domain.
 # Retrying an out-of-domain query only makes it worse. Skip retries immediately.
 _OUT_OF_DOMAIN_RELEVANCY = 0.05
+
+# When set, skip the evidence grader entirely. The raw answer is returned as
+# both `answer` and `original_answer`. Used for Phase 6 "no-grader" ablation.
+_DISABLE_GRADER = os.getenv("PAPERMIND_DISABLE_GRADER", "").lower() in ("1", "true", "yes")
 
 
 def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
@@ -68,10 +77,13 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
         grading          : dict   Per-sentence evidence grades + removed count
         plan             : dict   Query Plan from Upgrade 1
     """
+    reset_stats()
+    t_start         = time.monotonic()
     best_result     = None
     best_confidence = -1
     failure_type    = None
     out_of_domain   = False
+    raw_answer      = ""
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
 
@@ -115,19 +127,31 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
             # Always run grading so the frontend can render per-sentence
             # evidence indicators regardless of faithfulness level.
             # Only re-evaluate when grading actually removes sentences.
-            _pre_eval      = evaluate_answer(query, raw_answer, chunks)
-            grading_result = grade_answer(raw_answer, chunks)
-            answer         = grading_result["cleaned_answer"]
+            _pre_eval = evaluate_answer(query, raw_answer, chunks)
 
-            if _pre_eval["faithfulness"] > 0.75 or grading_result["removed_count"] == 0:
-                # Faithfulness already strong, or answer unchanged — reuse pre-eval
+            if _DISABLE_GRADER:
+                # Ablation path — bypass the grader entirely. Surface the raw
+                # answer and a no-op grading dict so downstream consumers
+                # (frontend, eval scorers) see a consistent shape.
+                grading_result = {
+                    "cleaned_answer":  raw_answer,
+                    "original_answer": raw_answer,
+                    "grades":          [],
+                    "removed_count":   0,
+                    "grading_failed":  False,
+                }
+                answer      = raw_answer
                 eval_scores = _pre_eval
             else:
-                # Sentences were removed — re-evaluate the cleaned text
-                eval_scores = evaluate_answer(query, answer, chunks)
+                grading_result = grade_answer(raw_answer, chunks)
+                answer         = grading_result["cleaned_answer"]
 
-            # Use the cleaned answer everywhere downstream
-            answer = grading_result["cleaned_answer"]
+                if _pre_eval["faithfulness"] > 0.75 or grading_result["removed_count"] == 0:
+                    # Faithfulness already strong, or answer unchanged — reuse pre-eval
+                    eval_scores = _pre_eval
+                else:
+                    # Sentences were removed — re-evaluate the cleaned text
+                    eval_scores = evaluate_answer(query, answer, chunks)
 
             if grading_result["removed_count"] > 0:
                 print(
@@ -169,6 +193,9 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
                 best_result = {
                     "query":            query,
                     "answer":           answer,
+                    # Pre-grader answer — kept so the eval harness can score
+                    # "with grader" vs "without grader" off the same run.
+                    "original_answer":  grading_result.get("original_answer", raw_answer),
                     "reasoning_chain":  reasoning_chain,
                     "confidence":       confidence,
                     "faithfulness":     eval_scores["faithfulness"],
@@ -190,8 +217,10 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
                 }
 
             # ── Early exit on pass ────────────────────────────────────────
+            # Break (not return) so the duration/llm_calls/providers wrap-up
+            # below still runs for successful queries.
             if confidence >= CONFIDENCE_THRESHOLD and not out_of_domain:
-                return best_result
+                break
 
             # ── Diagnose for next retry ───────────────────────────────────
             if attempt < MAX_ATTEMPTS and not out_of_domain:
@@ -199,6 +228,7 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
 
         except Exception as e:
             print(f"[pipeline] Attempt {attempt} error: {e}")
+            traceback.print_exc()
             continue
 
     # ── Graceful degradation ──────────────────────────────────────────────
@@ -206,6 +236,7 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
         best_result = {
             "query":            query,
             "answer":           "Unable to answer this question from the provided paper.",
+            "original_answer":  "",
             "reasoning_chain":  "",
             "confidence":       0.0,
             "faithfulness":     0.0,
@@ -219,7 +250,7 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
             "plan":             {},
             "grading":          {"grades": [], "removed_count": 0, "grading_failed": True},
         }
-    else:
+    elif not best_result["passed"]:
         warning = (
             "This question does not appear to be related to the paper's content. "
             "Please ask a question about the paper's topics."
@@ -228,9 +259,14 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
             f"{CONFIDENCE_THRESHOLD}). The paper may not contain sufficient "
             f"information to answer this question."
         )
-        best_result["passed"]       = False
         best_result["warning"]      = warning
         best_result["failure_type"] = "out_of_domain" if out_of_domain else failure_type
+
+    # ── Attach run metadata (timing, LLM call count, providers) ───────────
+    stats = get_stats()
+    best_result["duration_ms"]    = round((time.monotonic() - t_start) * 1000)
+    best_result["llm_calls"]      = stats["call_count"]
+    best_result["providers_used"] = stats["providers"]
 
     return best_result
 
@@ -250,6 +286,9 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
     Sources include paper_label ("A"/"B") and paper_id per chunk.
     """
     _empty_grading = {"grades": [], "removed_count": 0, "grading_failed": True}
+
+    reset_stats()
+    t_start = time.monotonic()
 
     try:
         plan = plan_query(query)
@@ -271,8 +310,18 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
         raw_answer      = generated["answer"]
         reasoning_chain = generated.get("reasoning_chain", "")
 
-        grading_result  = grade_answer(raw_answer, chunks)
-        answer          = grading_result["cleaned_answer"]
+        if _DISABLE_GRADER:
+            grading_result = {
+                "cleaned_answer":  raw_answer,
+                "original_answer": raw_answer,
+                "grades":          [],
+                "removed_count":   0,
+                "grading_failed":  False,
+            }
+            answer = raw_answer
+        else:
+            grading_result = grade_answer(raw_answer, chunks)
+            answer         = grading_result["cleaned_answer"]
 
         eval_scores = evaluate_answer(query, answer, chunks)
         confidence  = compute_confidence(
@@ -294,9 +343,11 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
                     "paper_id":     c.get("paper_id", ""),
                 })
 
+        stats = get_stats()
         return {
             "query":            query,
             "answer":           answer,
+            "original_answer":  grading_result.get("original_answer", raw_answer),
             "reasoning_chain":  reasoning_chain,
             "confidence":       confidence,
             "faithfulness":     eval_scores["faithfulness"],
@@ -313,15 +364,21 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
                 "removed_count":  grading_result["removed_count"],
                 "grading_failed": grading_result["grading_failed"],
             },
-            "is_comparison": True,
-            "paper_ids":     [paper_id_a, paper_id_b],
+            "is_comparison":  True,
+            "paper_ids":      [paper_id_a, paper_id_b],
+            "duration_ms":    round((time.monotonic() - t_start) * 1000),
+            "llm_calls":      stats["call_count"],
+            "providers_used": stats["providers"],
         }
 
     except Exception as e:
         print(f"[compare] ERROR: {e}")
+        traceback.print_exc()
+        stats = get_stats()
         return {
             "query":            query,
             "answer":           "Unable to compare these papers. Please try again.",
+            "original_answer":  "",
             "reasoning_chain":  "",
             "confidence":       0.0,
             "faithfulness":     0.0,
@@ -336,4 +393,7 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
             "grading":          _empty_grading,
             "is_comparison":    True,
             "paper_ids":        [paper_id_a, paper_id_b],
+            "duration_ms":      round((time.monotonic() - t_start) * 1000),
+            "llm_calls":        stats["call_count"],
+            "providers_used":   stats["providers"],
         }

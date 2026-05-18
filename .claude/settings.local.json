@@ -11,7 +11,12 @@
       "Bash(venv/Scripts/pip install *)",
       "Bash(PYTHONIOENCODING=utf-8 venv/Scripts/python -c ' *)",
       "Bash(node --input-type=module --eval ' *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(python -m py_compile ingestion/llm_client.py ingestion/retry_engine.py ingestion/query_router.py ingestion/pipeline.py ingestion/evidence_grader.py api/storage.py api/logger.py api/main.py)",
+      "Bash(ls venv/Scripts/python*)",
+      "Bash(ls venv/bin/python*)",
+      "Bash(./venv/Scripts/python.exe -c ' *)",
+      "Bash(PAPERMIND_MAX_ATTEMPTS=1 PAPERMIND_DISABLE_RERANK=1 PAPERMIND_DISABLE_GRADER=true ./venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

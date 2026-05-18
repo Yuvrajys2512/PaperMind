@@ -20,10 +20,31 @@ chat_completion(messages, max_tokens, temperature) -> str
 
 from __future__ import annotations
 import os
+import threading
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Per-thread call stats. FastAPI runs sync pipeline work in a thread-pool
+# executor, so thread-local isolates one request's stats from another's.
+# The pipeline calls reset_stats() at the start of a query and get_stats()
+# at the end to surface llm_calls / providers_used on the response.
+_stats_local = threading.local()
+
+
+def reset_stats() -> None:
+    """Zero the per-thread LLM call counter. Call at the start of a request."""
+    _stats_local.stats = {"call_count": 0, "providers": []}
+
+
+def get_stats() -> dict:
+    """Read per-thread LLM call stats accumulated since the last reset."""
+    s = getattr(_stats_local, "stats", None)
+    if s is None:
+        return {"call_count": 0, "providers": []}
+    return {"call_count": s["call_count"], "providers": list(s["providers"])}
+
 
 _PROVIDERS: list[dict] = []
 
@@ -120,6 +141,10 @@ def chat_completion(
             )
             text = response.choices[0].message.content.strip()
             print(f"[llm_client] Used: {provider['name']}")
+            s = getattr(_stats_local, "stats", None)
+            if s is not None:
+                s["call_count"] += 1
+                s["providers"].append(provider["name"])
             return text
 
         except Exception as e:

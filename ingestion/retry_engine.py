@@ -8,6 +8,7 @@ retry_query(query, paper_name, failure_type, attempt) -> dict
 """
 
 from __future__ import annotations
+import os
 from ingestion.llm_client import chat_completion
 
 # ── Diagnosis thresholds ──────────────────────────────────────────────────────
@@ -16,7 +17,15 @@ _FAITHFULNESS_LOW                  = 0.40
 _FAITHFULNESS_GENERATION_THRESHOLD = 0.80
 _RELEVANCY_LOW                     = 0.40
 
-MAX_ATTEMPTS = 3
+# Pipeline retry budget. Configurable via env so Phase 6 ablations
+# (e.g. "no-retry") can disable retries without code changes.
+# Clamped to [1, 3] because retry_query() only implements strategies for
+# attempts 2 and 3 — exceeding that range is undefined behaviour.
+try:
+    _env_max = int(os.getenv("PAPERMIND_MAX_ATTEMPTS", "3"))
+except ValueError:
+    _env_max = 3
+MAX_ATTEMPTS = max(1, min(3, _env_max))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

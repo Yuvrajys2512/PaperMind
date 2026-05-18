@@ -168,55 +168,72 @@ Classify every sentence. Return only the JSON array."""
 
 def _reconstruct_answer(original: str, sentences: list[str], grades: list[dict]) -> tuple[str, list[dict]]:
     """
-    Removes UNSUPPORTED sentences from the original answer text directly,
-    preserving all newlines, section headers, and formatting.
+    Rebuild the answer with UNSUPPORTED sentences removed.
+
+    Splits each original line on the same sentence boundaries as
+    `_split_sentences` and drops only the units flagged UNSUPPORTED.
+    This is safer than ``str.replace`` because a removed sentence that
+    happens to be a substring of a kept sentence cannot corrupt the
+    kept text.
     """
     import re as _re
 
-    grade_map: dict[str, str] = {}
+    grade_map:     dict[str, str] = {}
+    chunk_ref_map: dict[str, str] = {}
     for g in grades:
         key = g.get("sentence", "")[:60].strip()
-        grade_map[key] = g.get("grade", "INFERRED")
+        grade_map[key]     = g.get("grade", "INFERRED")
+        chunk_ref_map[key] = g.get("chunk_ref", "none")
 
-    enriched: list[dict] = []
-    to_remove: list[str] = []
+    enriched:  list[dict] = []
+    to_remove: set[str]   = set()
 
     for sent in sentences:
         key   = sent[:60].strip()
         grade = grade_map.get(key, "INFERRED")
-
-        chunk_ref = "none"
-        for g in grades:
-            if g.get("sentence", "")[:60].strip() == key:
-                chunk_ref = g.get("chunk_ref", "none")
-                break
-
-        keep = grade != "UNSUPPORTED"
+        keep  = grade != "UNSUPPORTED"
         if not keep:
-            to_remove.append(sent)
-
+            to_remove.add(sent)
         enriched.append({
             "sentence":  sent,
             "grade":     grade,
-            "chunk_ref": chunk_ref,
+            "chunk_ref": chunk_ref_map.get(key, "none"),
             "kept":      keep,
         })
 
-    # Remove UNSUPPORTED sentences in-place to preserve structure
-    cleaned = original
-    for sent in to_remove:
-        cleaned = cleaned.replace(sent, "")
+    # Walk the original line by line, splitting on the same boundaries as
+    # _split_sentences so each candidate unit can be matched exactly.
+    out_lines: list[str] = []
+    for line in original.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            out_lines.append(line)
+            continue
 
+        # Headers are gradeable units of their own.
+        if stripped.startswith("**") and stripped.endswith("**"):
+            if stripped not in to_remove:
+                out_lines.append(line)
+            continue
+
+        parts = stripped.split(". ")
+        kept_parts: list[str] = []
+        for i, part in enumerate(parts):
+            p = part.strip()
+            if not p:
+                continue
+            unit = p + "." if i < len(parts) - 1 else p
+            # Short fragments aren't gradeable (mirrors _split_sentences's
+            # >15-char filter) — keep them so prose stays readable.
+            if len(unit) <= 15 or unit not in to_remove:
+                kept_parts.append(unit)
+
+        if kept_parts:
+            out_lines.append(" ".join(kept_parts))
+
+    cleaned = "\n".join(out_lines)
     cleaned = _re.sub(r'\n{3,}', '\n\n', cleaned)
-    cleaned = _re.sub(r'[ \t]{2,}', ' ', cleaned)
-
-    # Remove orphaned fragments — lines left with ≤ 2 words after removal
-    lines = cleaned.split('\n')
-    lines = [
-        ln for ln in lines
-        if len(ln.strip().split()) > 2 or not ln.strip()
-    ]
-    cleaned = '\n'.join(lines).strip()
+    cleaned = _re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
 
     return cleaned, enriched
 
