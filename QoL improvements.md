@@ -1,16 +1,22 @@
-# QoL Improvements — Pre-Phase-6
+# QoL Improvements — Pre-Phase-6 and Beyond
 
-A targeted pass to make the upcoming evaluation phase (Phase 6) easier to wire
-up without changing the pipeline's answer-producing behaviour. Two groups:
+Three waves of changes:
 
 1. **Pre-Phase-6 enablers** — small additions the eval harness will read
    directly (run metadata, ablation toggles, raw answer surface, JSONL log).
 2. **Robustness wins** — quiet defects in the API/storage/grader layer that
    would have surfaced under N=300 eval load.
+3. **Core quality and UX upgrades** — better embedder, HyDE query expansion,
+   and live progress streaming to the frontend.
 
-Nothing here moves the pipeline's accuracy, retry behaviour, thresholds, or
-prompt text. The only observable change at runtime is additional fields in
-the `/query` response and a new `logs/queries.jsonl` file.
+Waves 1 and 2 don't move the pipeline's answers. Wave 3 *does* — it
+upgrades retrieval (BGE + HyDE) and the streaming UX, and requires
+re-ingesting any previously uploaded paper because the new embedder
+lives in a different vector space than the old MiniLM.
+
+> **One-time migration:** wipe `data/chroma_db/` and re-upload each PDF
+> you want to keep. Existing rows in `data/papers.json` reference paper
+> IDs that no longer have valid embeddings.
 
 ---
 
@@ -307,7 +313,7 @@ untouched — the eval harness will replace them.
   is a substring of the other produces the correct cleaned text
   (A intact, B removed).
 
-## Files changed
+## Files changed (waves 1 + 2)
 
 ```
 api/logger.py
@@ -319,3 +325,168 @@ ingestion/pipeline.py
 ingestion/query_router.py
 ingestion/retry_engine.py
 ```
+
+---
+
+## 3. Core quality and UX upgrades (wave 3)
+
+### 3.1 Embedder swap to BGE-small-en-v1.5 — `ingestion/models.py`, `embedder.py`, `retriever.py`, `evaluator.py`
+
+**What.** Replaced `sentence-transformers/all-MiniLM-L6-v2` with
+`BAAI/bge-small-en-v1.5`. Same 384-dim output, so ChromaDB schema
+doesn't change, but a different vector space. Added two new helpers:
+
+```python
+embed_query(text)   -> np.ndarray      # adds BGE instruction prefix
+embed_passages(ts)  -> np.ndarray      # no prefix — chunk / answer side
+```
+
+**Why.** MiniLM-L6 (2021) is now far down MTEB leaderboards; BGE-small
+is the same parameter class and ~3-4 points stronger on retrieval
+benchmarks. BGE is also *asymmetric*: it was fine-tuned with the
+query prefix `"Represent this sentence for searching relevant
+passages: "` on one side and bare text on the other. Using a single
+`encode()` for both — as the old code did — leaves performance on the
+table even after the model swap.
+
+**How.**
+- `models.py` owns the model + both helpers.
+- `retriever.retrieve()` uses `embed_query()` for the user's question
+  (or HyDE pseudo-passage; see §3.2).
+- `embedder.embed_and_store()` uses `embed_passages()` for chunks.
+- `evaluator._score_faithfulness` is symmetric (passage↔passage), so
+  both sides use `embed_passages()`.
+- `evaluator._score_answer_relevancy` is asymmetric (query↔passage),
+  so the query side uses `embed_query()`.
+
+**Effect.** Higher recall on long technical queries. Verified locally:
+a sample query has cosine 0.63 with a related passage and 0.43 with
+an unrelated one — the gap that retrieval relies on.
+
+**Migration.** Any paper previously ingested under MiniLM is now
+unreadable to BGE — the vectors look like noise to it. Wipe
+`data/chroma_db/` and re-upload.
+
+---
+
+### 3.2 HyDE — Hypothetical Document Embeddings — `ingestion/hyde.py`, `hybrid_retriever.py`, `query_router.py`
+
+**What.** A new module that, given the user's question and the query
+plan, asks the LLM to write a 3-4 sentence pseudo-passage in the
+paper's vocabulary, then embeds *that* for dense retrieval. BM25 still
+uses the original question, so lexical signal is preserved.
+
+**Why.** Users type questions in casual English ("how is it trained?")
+but papers describe themselves in domain-specific terms ("trained on
+8 NVIDIA P100 GPUs over 12 hours using Adam"). Embedding the casual
+phrasing means the closest passage is whatever in the paper happens
+to use similar everyday vocabulary — often not the right one. HyDE
+sidesteps that mismatch by embedding text that *looks like* a paper
+passage.
+
+**How.**
+- `hyde.generate_hypothetical(query, plan, paper_name)` returns the
+  pseudo-passage or, on any LLM failure, the original query (HyDE is
+  best-effort; it must never block retrieval).
+- `hybrid_retriever.hybrid_retrieve()` gained a `hyde_text` kwarg; when
+  set it replaces the query on the *vector* side only.
+- `query_router.route_query()` calls HyDE for `complexity == "simple"`
+  queries. Multi-hop is intentionally skipped — sub-questions are
+  already targeted retrieval queries, and generating one HyDE per
+  sub-question would balloon LLM cost.
+- Env var `PAPERMIND_DISABLE_HYDE=1` bypasses HyDE for ablations or
+  latency-sensitive runs.
+
+**Effect.** One extra LLM call per simple query (~300-600ms with
+Gemini Flash), in exchange for materially better dense-retrieval
+recall — especially on "how/why/what was the…" questions whose
+answers live in mechanism or methods sections.
+
+---
+
+### 3.3 Streaming progress to the frontend — `pipeline.py`, `query_router.py`, `api/main.py`, `frontend/src/api.js`, `pages/ChatPage.jsx`
+
+**What.** A new `POST /query/stream` endpoint that returns
+Server-Sent Events. The pipeline now accepts an optional
+`on_progress(event)` callback; at each milestone it pushes
+`{ stage, message }` events. The frontend renders them as a live
+"what is happening right now" status under the spinner, with a
+"Show progress" toggle that expands the full trail.
+
+Backend events look like:
+
+```
+event: open       data: { "req_id": "abc12345" }
+event: progress   data: { "stage": "planning",   "message": "Planning your question…" }
+event: progress   data: { "stage": "hyde",       "message": "Drafting a search seed…" }
+event: progress   data: { "stage": "retrieving", "message": "Searching the paper…" }
+event: progress   data: { "stage": "reviewing",  "message": "Reviewing 12 relevant passages…" }
+event: progress   data: { "stage": "drafting",   "message": "Drafting an answer…" }
+event: progress   data: { "stage": "verifying",  "message": "Verifying claims against the paper…" }
+event: done       data: { …full result dict, same shape as /query… }
+```
+
+**Why.** A 7-10 s spinner with no feedback feels broken; the same
+duration with five updates feels alive and informative. The user
+asked for "what I see in the backend logs, but in user-friendly
+language" — this surfaces exactly the milestones the backend already
+prints, phrased for a human reader.
+
+**How.**
+- `query_router.route_query` and `pipeline.answer_query` /
+  `compare_papers` accept `on_progress` and emit at stage transitions.
+  The callback is wrapped in a try/except so a frontend bug or a
+  closed connection can't crash the pipeline.
+- The SSE endpoint runs the pipeline in `loop.run_in_executor` (it's
+  sync work). The progress callback is built with
+  `loop.call_soon_threadsafe` so cross-thread queue writes are safe.
+- Existing `POST /query` endpoint is unchanged — the streaming
+  endpoint is additive. Old clients keep working; the eval harness
+  in Phase 6 can use either.
+- Frontend: a new `streamQuery()` helper in `src/api.js` parses SSE
+  frames from a `fetch` ReadableStream. `ChatPage.jsx` swaps the
+  static "Processing neural context" spinner for a `ProgressLog`
+  component showing the latest message + a "Show progress" toggle.
+
+**Effect.** Same total time, but the user sees the system thinking.
+Multi-hop queries (slower, more stages) benefit the most because
+their longer pipeline produces 6-8 visible events instead of one
+silent wait.
+
+---
+
+## Files changed (wave 3)
+
+```
+ingestion/embedder.py
+ingestion/evaluator.py
+ingestion/hybrid_retriever.py
+ingestion/hyde.py            (new)
+ingestion/models.py
+ingestion/pipeline.py
+ingestion/query_router.py
+ingestion/retriever.py
+api/main.py
+frontend/src/api.js
+frontend/src/pages/ChatPage.jsx
+```
+
+## Verification done (wave 3)
+
+- `python -m py_compile` clean on all 14 edited modules.
+- BGE-small loads correctly from HuggingFace, emits 384-dim vectors,
+  and produces the expected query/passage asymmetry on a smoke test
+  (related passage: 0.63 cosine; unrelated: 0.43).
+- HyDE module imports cleanly; `PAPERMIND_DISABLE_HYDE=1` flips
+  the flag.
+- End-to-end pipeline run requires re-ingest (different vector space)
+  — not validated programmatically here. Re-ingest one paper and
+  send a question through the UI to confirm streaming + retrieval
+  both work.
+
+## New env vars
+
+| Var | Default | Effect |
+|---|---|---|
+| `PAPERMIND_DISABLE_HYDE` | unset | Skip HyDE pseudo-passage generation; use raw query for dense retrieval. |
+

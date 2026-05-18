@@ -46,7 +46,7 @@ _OUT_OF_DOMAIN_RELEVANCY = 0.05
 _DISABLE_GRADER = os.getenv("PAPERMIND_DISABLE_GRADER", "").lower() in ("1", "true", "yes")
 
 
-def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
+def answer_query(query: str, paper_name: str, request_id: str = None, on_progress=None) -> dict:
     """
     Run the full PaperMind pipeline:
 
@@ -85,6 +85,13 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
     out_of_domain   = False
     raw_answer      = ""
 
+    def _emit(stage: str, message: str, **kwargs):
+        if on_progress:
+            try:
+                on_progress({"stage": stage, "message": message, **kwargs})
+            except Exception:
+                pass
+
     for attempt in range(1, MAX_ATTEMPTS + 1):
 
         # Skip retries if query is out-of-domain
@@ -96,7 +103,8 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
         try:
             # ── Step 1 & 2: Route + Generate ─────────────────────────────
             if attempt == 1:
-                routed    = route_query(query, paper_name)
+                routed = route_query(query, paper_name, on_progress=on_progress)
+                _emit("drafting", "Drafting an answer…")
                 generated = generate_answer(
                     query  = routed["query"],
                     chunks = routed["chunks"],
@@ -110,6 +118,10 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
                 plan            = routed["plan"]
 
             else:
+                _emit(
+                    "retrying",
+                    f"Confidence below threshold — trying a different angle (attempt {attempt})…",
+                )
                 retry_result = retry_query(
                     query        = query,
                     paper_name   = paper_name,
@@ -127,6 +139,7 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
             # Always run grading so the frontend can render per-sentence
             # evidence indicators regardless of faithfulness level.
             # Only re-evaluate when grading actually removes sentences.
+            _emit("verifying", "Verifying claims against the paper…")
             _pre_eval = evaluate_answer(query, raw_answer, chunks)
 
             if _DISABLE_GRADER:
@@ -275,7 +288,7 @@ def answer_query(query: str, paper_name: str, request_id: str = None) -> dict:
 # Session 7 — Multi-paper comparison
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
+def compare_papers(query: str, paper_id_a: str, paper_id_b: str, on_progress=None) -> dict:
     """
     Run the pipeline for a two-paper comparison query.
 
@@ -290,7 +303,15 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
     reset_stats()
     t_start = time.monotonic()
 
+    def _emit(stage: str, message: str, **kwargs):
+        if on_progress:
+            try:
+                on_progress({"stage": stage, "message": message, **kwargs})
+            except Exception:
+                pass
+
     try:
+        _emit("planning", "Planning the comparison…")
         plan = plan_query(query)
         plan["answer_type"] = "comparison"
         plan["answer_structure"] = [
@@ -300,16 +321,20 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str) -> dict:
             "Note any agreements or common ground",
         ]
 
+        _emit("retrieving", "Searching both papers…")
         raw_chunks = compare_retrieve(query, paper_id_a, paper_id_b, top_k=5)
         if not raw_chunks:
             raise RuntimeError("No chunks retrieved from either paper")
 
+        _emit("reviewing", f"Reviewing {len(raw_chunks)} passages across both papers…")
         chunks = rerank(query, raw_chunks, top_k=min(10, len(raw_chunks)))
 
+        _emit("drafting", "Drafting the comparison…")
         generated       = generate_answer(query=query, chunks=chunks, plan=plan)
         raw_answer      = generated["answer"]
         reasoning_chain = generated.get("reasoning_chain", "")
 
+        _emit("verifying", "Verifying claims against both papers…")
         if _DISABLE_GRADER:
             grading_result = {
                 "cleaned_answer":  raw_answer,

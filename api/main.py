@@ -1,5 +1,6 @@
 import sys
 import asyncio
+import json
 import time
 import shutil
 from typing import Optional
@@ -12,6 +13,7 @@ sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from ingestion.pipeline import answer_query, compare_papers
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from api.storage import (
     create_paper_record,
     update_paper_status,
@@ -204,3 +206,153 @@ async def query_paper(request: QueryRequest):
     )
     result["request_id"] = req_id
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Streaming endpoint — Server-Sent Events
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Why SSE and not WebSocket: the channel is one-way (server → client), the
+# payload is small JSON deltas, and EventSource / fetch-stream parsing on
+# the browser is trivial. SSE also survives ordinary proxies that block
+# WebSocket upgrades.
+#
+# Architecture:
+#   1. Client POSTs to /query/stream.
+#   2. We spawn the pipeline in run_in_executor (it's sync CPU/LLM work).
+#   3. The executor passes a thread-safe on_progress callback that
+#      drops {stage, message, ...} dicts onto an asyncio.Queue.
+#   4. The SSE generator drains the queue, yielding each as a
+#      `data: <json>\n\n` frame. The final frame's stage is "done"
+#      (carrying the full result) or "error".
+
+def _sse_format(event_type: str, payload: dict) -> str:
+    """Encode one Server-Sent Event frame."""
+    return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _make_progress_pusher(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    """
+    Return a callback the pipeline can invoke from its worker thread.
+    Uses call_soon_threadsafe so the asyncio.Queue is touched only from
+    the loop thread — putting from another thread directly is undefined
+    behaviour on some Python versions.
+    """
+    def push(event: dict):
+        loop.call_soon_threadsafe(queue.put_nowait, ("progress", event))
+    return push
+
+
+@app.post("/query/stream")
+async def query_stream(request: QueryRequest):
+    req_id = generate_request_id()
+    loop   = asyncio.get_running_loop()
+    t0     = time.monotonic()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    is_compare = bool(request.paper_ids and len(request.paper_ids) == 2)
+
+    # Validate inputs the same way /query does — bail fast with HTTPException
+    # before opening the event stream, so the client gets a real 4xx.
+    if is_compare:
+        paper_id_a, paper_id_b = request.paper_ids[0], request.paper_ids[1]
+        for pid in (paper_id_a, paper_id_b):
+            p = get_paper(pid)
+            if not p:
+                raise HTTPException(status_code=404, detail=f"Paper {pid} not found.")
+            if p["status"] != "ready":
+                raise HTTPException(status_code=400, detail=f"Paper {pid} is not ready yet.")
+        log_paper_id = f"{paper_id_a[:4]}+{paper_id_b[:4]}"
+    else:
+        paper_id = request.paper_id or (request.paper_ids[0] if request.paper_ids else "")
+        if not paper_id:
+            raise HTTPException(status_code=400, detail="Provide paper_id or paper_ids.")
+        paper = get_paper(paper_id)
+        if not paper:
+            raise HTTPException(status_code=404, detail="Paper not found.")
+        if paper["status"] != "ready":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Paper is not ready yet. Current status: {paper['status']}",
+            )
+        log_paper_id = paper_id
+
+    on_progress = _make_progress_pusher(queue, loop)
+
+    async def run_pipeline():
+        try:
+            if is_compare:
+                fn = lambda: compare_papers(
+                    request.question, paper_id_a, paper_id_b, on_progress=on_progress,
+                )
+                timeout = 120.0
+            else:
+                fn = lambda: answer_query(
+                    request.question, paper_id, request_id=req_id, on_progress=on_progress,
+                )
+                timeout = 60.0
+
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, fn),
+                timeout=timeout,
+            )
+            await queue.put(("done", result))
+        except asyncio.TimeoutError:
+            await queue.put(("error", {
+                "message": "Query timed out. The paper may be unusually large or the LLM providers slow.",
+            }))
+        except Exception as exc:
+            await queue.put(("error", {"message": f"Pipeline failed: {exc}"}))
+
+    asyncio.create_task(run_pipeline())
+
+    async def event_stream():
+        # First frame so the client knows the channel is open before any
+        # heavy work lands. Helps clients detect connection success.
+        yield _sse_format("open", {"req_id": req_id})
+
+        while True:
+            kind, payload = await queue.get()
+
+            if kind == "progress":
+                yield _sse_format("progress", payload)
+                continue
+
+            if kind == "error":
+                yield _sse_format("error", payload)
+                # Log the failure as a FAIL so it shows up in queries.jsonl
+                log_query(
+                    req_id=req_id,
+                    paper_id=log_paper_id,
+                    question=request.question,
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                    confidence=0,
+                    attempts=0,
+                    passed=False,
+                )
+                return
+
+            if kind == "done":
+                result = payload
+                result["request_id"] = req_id
+                log_query(
+                    req_id=req_id,
+                    paper_id=log_paper_id,
+                    question=request.question,
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                    confidence=result.get("confidence", 0),
+                    attempts=result.get("attempts", 1),
+                    passed=result.get("passed", False),
+                    llm_calls=result.get("llm_calls", 0),
+                    providers=result.get("providers_used", []),
+                )
+                yield _sse_format("done", result)
+                return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        # Disable nginx/proxy buffering so progress events flush
+        # immediately rather than batching.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

@@ -1,14 +1,9 @@
 # ingestion/embedder.py
 
 import chromadb
-from sentence_transformers import SentenceTransformer
 import hashlib
 
-# Load the embedding model once at module level
-# This means it loads when the file is imported, not on every function call
-# all-MiniLM-L6-v2 produces 384-dimensional vectors
-# Small enough to run fast on CPU, accurate enough for academic retrieval
-model = SentenceTransformer("all-MiniLM-L6-v2")
+from ingestion.models import embed_passages
 
 # ChromaDB client — PersistentClient means data is saved to disk
 # so you don't have to re-embed every time you restart the program
@@ -57,10 +52,11 @@ def embed_and_store(chunks: list, paper_name: str) -> None:
     texts = [chunk["text"] for chunk in chunks]
     
     print(f"Embedding {len(texts)} chunks...")
-    
-    # Convert all texts to vectors in one batch call
-    # embeddings is a list of lists — one vector per chunk
-    embeddings = model.encode(texts, show_progress_bar=False)
+
+    # Convert all texts to vectors in one batch call.
+    # `embed_passages` uses no instruction prefix because BGE was trained
+    # asymmetrically: only queries get the prefix, not chunks.
+    embeddings = embed_passages(texts)
     
     # Prepare metadata for each chunk
     # ChromaDB metadata values must be strings, ints, or floats — not lists

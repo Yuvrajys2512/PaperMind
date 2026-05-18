@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { queryPaper, listPapers, comparePapers, deletePaper } from '../api'
+import { listPapers, deletePaper, queryPaperStream, comparePapersStream } from '../api'
 import ReactMarkdown from 'react-markdown'
 
 /* ─────────────────────────────────────────────────────────────────
@@ -509,6 +509,74 @@ function Message({ msg }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
+   PROGRESS LOG — replaces the static spinner with live pipeline
+   progress events. Collapsed by default; click to expand the trail.
+───────────────────────────────────────────────────────────────── */
+function ProgressLog({ progress }) {
+  const [expanded, setExpanded] = useState(false)
+  const latest = progress.length > 0 ? progress[progress.length - 1] : null
+
+  return (
+    <div className="flex justify-start mb-8">
+      <div className="pm-card" style={{ padding: '18px 24px', minWidth: 320 }}>
+        <div className="flex items-center gap-4">
+          {/* Animated dots — same vibe as the old spinner */}
+          <div className="flex gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-cyan-400 animate-bounce"
+              style={{ animationDelay: '0ms', boxShadow: '0 0 6px rgba(0,245,255,0.6)' }} />
+            <div className="w-2 h-2 rounded-full bg-blue-400 animate-bounce"
+              style={{ animationDelay: '150ms', boxShadow: '0 0 6px rgba(96,165,250,0.6)' }} />
+            <div className="w-2 h-2 rounded-full bg-violet-400 animate-bounce"
+              style={{ animationDelay: '300ms', boxShadow: '0 0 6px rgba(167,139,250,0.6)' }} />
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <span
+              key={latest ? progress.length : 'idle'}
+              className="block text-[12px] text-gray-300 truncate animate-slide-down"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            >
+              {latest ? latest.message : 'Connecting…'}
+            </span>
+          </div>
+
+          {progress.length > 0 && (
+            <button
+              onClick={() => setExpanded(e => !e)}
+              className="text-[9px] uppercase tracking-wider text-gray-600 hover:text-cyan-400 transition-colors font-bold flex-shrink-0"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            >
+              {expanded ? 'Hide' : 'Show progress'}
+            </button>
+          )}
+        </div>
+
+        {expanded && progress.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-white/[0.04] space-y-1.5 animate-slide-down">
+            {progress.map((p, i) => {
+              const isLast = i === progress.length - 1
+              return (
+                <div key={i} className="flex items-center gap-2 text-[11px]">
+                  <span className="text-gray-700 select-none" style={{ fontFamily: 'var(--font-mono)' }}>
+                    {isLast ? '└' : '├'}
+                  </span>
+                  <span
+                    className={isLast ? 'text-cyan-300' : 'text-gray-500'}
+                    style={{ fontFamily: 'var(--font-mono)' }}
+                  >
+                    {p.message}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────────
    CHAT PAGE
 ───────────────────────────────────────────────────────────────── */
 export default function ChatPage({ paper: initialPaper, onBack }) {
@@ -516,6 +584,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
   const [allMessages, setAllMessages]       = useState({ [initialPaper.paper_id]: [] })
   const [input, setInput]                   = useState('')
   const [loading, setLoading]               = useState(false)
+  const [progress, setProgress]             = useState([])   // [{ stage, message }]
   const [papers, setPapers]                 = useState([])
   const [showSwitcher, setShowSwitcher]     = useState(false)
   const [compareMode, setCompareMode]       = useState(false)
@@ -562,10 +631,18 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       [paperId]: [...(prev[paperId] || []), { role: 'user', content: question }],
     }))
     setLoading(true)
+    setProgress([])
+
+    const onEvent = ({ type, data }) => {
+      if (type === 'progress') {
+        setProgress(prev => [...prev, { stage: data.stage, message: data.message }])
+      }
+    }
+
     try {
       const result = (compareMode && comparePaper2)
-        ? await comparePapers(paperId, comparePaper2.paper_id, question)
-        : await queryPaper(paperId, question)
+        ? await comparePapersStream(paperId, comparePaper2.paper_id, question, onEvent)
+        : await queryPaperStream(paperId, question, onEvent)
       setAllMessages(prev => ({
         ...prev,
         [paperId]: [...(prev[paperId] || []), { role: 'assistant', content: result }],
@@ -584,6 +661,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       }))
     } finally {
       setLoading(false)
+      setProgress([])
     }
   }
 
@@ -837,24 +915,8 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
 
           {messages.map((msg, i) => <Message key={i} msg={msg} />)}
 
-          {/* Loading indicator */}
-          {loading && (
-            <div className="flex justify-start mb-8">
-              <div className="pm-card flex items-center gap-4" style={{ padding: '18px 24px' }}>
-                <div className="flex gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-cyan-400 animate-bounce"
-                    style={{ animationDelay: '0ms', boxShadow: '0 0 6px rgba(0,245,255,0.6)' }} />
-                  <div className="w-2 h-2 rounded-full bg-blue-400 animate-bounce"
-                    style={{ animationDelay: '150ms', boxShadow: '0 0 6px rgba(96,165,250,0.6)' }} />
-                  <div className="w-2 h-2 rounded-full bg-violet-400 animate-bounce"
-                    style={{ animationDelay: '300ms', boxShadow: '0 0 6px rgba(167,139,250,0.6)' }} />
-                </div>
-                <span className="text-[11px] text-gray-600 uppercase tracking-[0.18em] font-semibold">
-                  Processing neural context
-                </span>
-              </div>
-            </div>
-          )}
+          {/* Loading indicator with live progress */}
+          {loading && <ProgressLog progress={progress} />}
 
           <div ref={bottomRef} className="h-24" />
         </div>

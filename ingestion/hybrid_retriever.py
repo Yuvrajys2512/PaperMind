@@ -32,18 +32,35 @@ def reciprocal_rank_fusion(bm25_results, vector_results, k=60):
     return merged
 
 
-def hybrid_retrieve(query: str, paper_name: str, top_k: int = 5, boost_terms: list[str] = None):
+def hybrid_retrieve(
+    query: str,
+    paper_name: str,
+    top_k: int = 5,
+    boost_terms: list[str] = None,
+    hyde_text: str | None = None,
+):
     """
-    Runs BM25 + vector search in parallel, merges with RRF,
-    returns top_k results.
+    Runs BM25 + vector search in parallel, merges with RRF, returns top_k.
+
+    Parameters
+    ----------
+    query       : User's question — used by BM25 (lexical signal).
+    paper_name  : Paper identifier.
+    top_k       : Number of final results to return after RRF.
+    boost_terms : Extra terms appended to the BM25 query (key_concepts).
+    hyde_text   : Optional HyDE pseudo-passage to use for *dense* retrieval
+                  in place of the raw query. BM25 always uses the original
+                  query so lexical hits aren't replaced by hallucinated
+                  terminology.
     """
     if boost_terms:
         boosted_query = query + " " + " ".join(boost_terms)
     else:
         boosted_query = query
 
-    bm25_results = bm25_retrieve(boosted_query, paper_name, top_k=10)
-    vector_results = retrieve(query, paper_name, top_k=10)
+    bm25_results   = bm25_retrieve(boosted_query, paper_name, top_k=10)
+    vector_query   = hyde_text if hyde_text else query
+    vector_results = retrieve(vector_query, paper_name, top_k=10)
 
     merged = reciprocal_rank_fusion(bm25_results, vector_results)
 

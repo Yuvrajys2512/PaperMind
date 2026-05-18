@@ -13,7 +13,7 @@ compute_confidence(faithfulness, answer_relevancy) → float (0-100)
 """
 
 import numpy as np
-from ingestion.models import get_embedding_model
+from ingestion.models import embed_query, embed_passages
 
 _SUPPORT_THRESHOLD = 0.55
 
@@ -45,9 +45,11 @@ def _score_faithfulness(answer: str, chunk_texts: list[str]) -> float:
     if not sentences:
         return 0.0
 
-    model         = get_embedding_model()
-    chunk_embs    = model.encode(chunk_texts)
-    sentence_embs = model.encode(sentences)
+    # Both sides are passage-like (chunks vs answer sentences), so no
+    # query prefix on either — that's how BGE was trained for
+    # symmetric similarity.
+    chunk_embs    = embed_passages(chunk_texts)
+    sentence_embs = embed_passages(sentences)
 
     supported = sum(
         1 for sent_emb in sentence_embs
@@ -57,9 +59,10 @@ def _score_faithfulness(answer: str, chunk_texts: list[str]) -> float:
 
 
 def _score_answer_relevancy(query: str, answer: str) -> float:
-    model      = get_embedding_model()
-    query_emb  = model.encode([query])[0]
-    answer_emb = model.encode([answer])[0]
+    # Asymmetric: the query gets the BGE instruction prefix, the answer
+    # (a passage) does not.
+    query_emb  = embed_query(query)
+    answer_emb = embed_passages([answer])[0]
     return _cosine_similarity(query_emb, answer_emb)
 
 

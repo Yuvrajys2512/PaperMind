@@ -1,5 +1,5 @@
 import chromadb
-from ingestion.models import get_embedding_model
+from ingestion.models import embed_query
 
 client = chromadb.PersistentClient(path="data/chroma_db")
 
@@ -12,7 +12,8 @@ def retrieve(query: str, paper_name: str, top_k: int = 5) -> list:
 
     collection = client.get_collection(name=clean_name)
 
-    query_embedding = get_embedding_model().encode(query).tolist()
+    # BGE expects the query instruction prefix; `embed_query` adds it.
+    query_embedding = embed_query(query).tolist()
 
     results = collection.query(
         query_embeddings=[query_embedding],

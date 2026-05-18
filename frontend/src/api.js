@@ -45,3 +45,64 @@ export async function comparePapers(paperIdA, paperIdB, question) {
   if (!res.ok) throw new Error('Compare failed')
   return res.json()
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   Streaming variants — Server-Sent Events
+   onEvent receives { type, data } where type ∈ {open, progress, done, error}.
+───────────────────────────────────────────────────────────────── */
+async function streamQuery(body, onEvent) {
+  const res = await fetch(`${BASE}/query/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok || !res.body) {
+    throw new Error(`Stream failed: HTTP ${res.status}`)
+  }
+
+  const reader  = res.body.getReader()
+  const decoder = new TextDecoder()
+  let   buffer  = ''
+  let   finalResult = null
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    // SSE frames are separated by blank lines. Parse complete frames
+    // and leave any partial frame in the buffer for the next chunk.
+    let idx
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const rawFrame = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+
+      let eventType = 'message'
+      let dataLine  = ''
+      for (const line of rawFrame.split('\n')) {
+        if (line.startsWith('event:')) eventType = line.slice(6).trim()
+        else if (line.startsWith('data:')) dataLine += line.slice(5).trim()
+      }
+      if (!dataLine) continue
+
+      let parsed
+      try { parsed = JSON.parse(dataLine) } catch { continue }
+
+      onEvent({ type: eventType, data: parsed })
+
+      if (eventType === 'done')  finalResult = parsed
+      if (eventType === 'error') throw new Error(parsed.message || 'Pipeline error')
+    }
+  }
+
+  if (!finalResult) throw new Error('Stream ended without a final result')
+  return finalResult
+}
+
+export function queryPaperStream(paperId, question, onEvent) {
+  return streamQuery({ paper_id: paperId, question }, onEvent)
+}
+
+export function comparePapersStream(paperIdA, paperIdB, question, onEvent) {
+  return streamQuery({ paper_ids: [paperIdA, paperIdB], question }, onEvent)
+}

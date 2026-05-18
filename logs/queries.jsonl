@@ -1,0 +1,1 @@
+{"timestamp": "2026-05-18T13:30:05.762995+00:00", "req_id": "788354d5", "paper_id": "0d691b03-76a1-436a-b671-8370e24aa03d", "question": "why is attention mechanism better", "duration_ms": 26898, "confidence": 92.0, "attempts": 1, "passed": true, "llm_calls": 3, "providers": ["Cerebras", "Cerebras", "Cerebras"]}
