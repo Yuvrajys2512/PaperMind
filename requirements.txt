@@ -24,6 +24,9 @@ python-multipart>=0.0.20
 # LLM providers (all accessed via OpenAI-compatible interface)
 openai>=2.0
 
+# Async HTTP client (discovery module — paper search + PDF download)
+httpx>=0.27
+
 # Environment variable loading
 python-dotenv>=1.0
 

@@ -78,5 +78,69 @@
     "uploaded_at": "2026-05-18T13:28:38.986820+00:00",
     "completed_at": "2026-05-18T13:29:17.113396+00:00",
     "error": null
+  },
+  "0a687c7d-d783-4dd5-91d6-ce16a1fc3367": {
+    "paper_id": "0a687c7d-d783-4dd5-91d6-ce16a1fc3367",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-18T17:37:39.960509+00:00",
+    "completed_at": "2026-05-18T17:38:25.240435+00:00",
+    "error": null
+  },
+  "3fb46a10-3706-4391-91d5-b38c10a6708c": {
+    "paper_id": "3fb46a10-3706-4391-91d5-b38c10a6708c",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-22T06:43:36.936555+00:00",
+    "completed_at": "2026-05-22T06:45:08.796881+00:00",
+    "error": null
+  },
+  "e71d946d-3346-4be8-bb24-51e244e8d671": {
+    "paper_id": "e71d946d-3346-4be8-bb24-51e244e8d671",
+    "filename": "NEURAL MACHINE TRANSLATION.pdf",
+    "status": "failed",
+    "uploaded_at": "2026-05-22T07:01:36.483232+00:00",
+    "completed_at": null,
+    "error": "Connection error."
+  },
+  "493cf259-87dc-46e0-a4ef-640d31dfa0fb": {
+    "paper_id": "493cf259-87dc-46e0-a4ef-640d31dfa0fb",
+    "filename": "NEURAL MACHINE TRANSLATION.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-22T07:02:04.549114+00:00",
+    "completed_at": "2026-05-22T07:04:28.810746+00:00",
+    "error": null
+  },
+  "ee8064e1-bded-4810-968c-fb643d5b3ee4": {
+    "paper_id": "ee8064e1-bded-4810-968c-fb643d5b3ee4",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-22T07:41:52.598166+00:00",
+    "completed_at": "2026-05-22T07:43:32.214352+00:00",
+    "error": null
+  },
+  "de4ca2b4-efc5-4606-8d30-d23db316ea8d": {
+    "paper_id": "de4ca2b4-efc5-4606-8d30-d23db316ea8d",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-22T07:46:52.963990+00:00",
+    "completed_at": "2026-05-22T07:47:34.528441+00:00",
+    "error": null
+  },
+  "c8102ccd-ce7a-428e-8950-49f2975107cd": {
+    "paper_id": "c8102ccd-ce7a-428e-8950-49f2975107cd",
+    "filename": "Attention is all you need.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-22T07:50:49.118578+00:00",
+    "completed_at": "2026-05-22T07:52:38.006738+00:00",
+    "error": null
+  },
+  "c7721a5b-3bc0-45b7-980d-4a80f22a47ac": {
+    "paper_id": "c7721a5b-3bc0-45b7-980d-4a80f22a47ac",
+    "filename": "FAIR-RAG: Faithful Adaptive Iterative Refinement for Retrieval-Augmented Generat.pdf",
+    "status": "ready",
+    "uploaded_at": "2026-05-22T21:48:38.649505+00:00",
+    "completed_at": "2026-05-22T21:49:22.461944+00:00",
+    "error": null
   }
 }

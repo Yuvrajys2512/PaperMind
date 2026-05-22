@@ -22,7 +22,12 @@
       "Bash(python -m py_compile api/main.py)",
       "Bash(python -m py_compile api/main.py api/storage.py api/logger.py ingestion/llm_client.py ingestion/retry_engine.py ingestion/query_router.py ingestion/pipeline.py ingestion/evidence_grader.py ingestion/hyde.py ingestion/hybrid_retriever.py ingestion/models.py ingestion/embedder.py ingestion/retriever.py ingestion/evaluator.py)",
       "Bash(PAPERMIND_DISABLE_HYDE=1 ./venv/Scripts/python.exe -c ' *)",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts',{}\\), indent=2\\)\\)\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts',{}\\), indent=2\\)\\)\")",
+      "Bash(npx vite *)",
+      "Bash(Remove-Item *)",
+      "Bash(grep -E \"^d|\\\\.py$|\\\\.json$|\\\\.md$\")",
+      "Bash(python -c \"from discovery.router import router; print\\('router OK, routes:', [r.path for r in router.routes]\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('api/main.py'\\).read\\(\\)\\); print\\('main.py OK'\\)\")"
     ]
   }
 }

@@ -253,7 +253,7 @@ These are the corners that will tempt you and that you must not cut:
 7. **Don't tune the pipeline on the eval set.** Once the eval set is built, freeze it. If you change thresholds based on eval results, you've contaminated your test set. Keep a separate dev set (~30 questions) for tuning.
 8. **Report failures.** If the retry engine lifts accuracy by 1 point and costs 3x latency, say so. Honest negative results build credibility.
 
----
+---------------
 
 ## 11. Phase deliverables — done = all six exist
 

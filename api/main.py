@@ -25,6 +25,7 @@ from api.storage import (
 from api.logger import generate_request_id, log_query
 from ingestion.ingest_document import ingest_document
 from ingestion.bm25_retriever  import invalidate_bm25_cache
+from discovery.router import router as discovery_router
 
 app = FastAPI(
     title="PaperMind API",
@@ -39,6 +40,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(discovery_router)
 
 
 def run_ingestion(paper_id: str, pdf_path: str, paper_name: str):

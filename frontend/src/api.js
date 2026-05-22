@@ -106,3 +106,36 @@ export function queryPaperStream(paperId, question, onEvent) {
 export function comparePapersStream(paperIdA, paperIdB, question, onEvent) {
   return streamQuery({ paper_ids: [paperIdA, paperIdB], question }, onEvent)
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   Discovery — live paper search + import
+───────────────────────────────────────────────────────────────── */
+export async function searchPapers(query, limit = 20) {
+  const res = await fetch(`${BASE}/discovery/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, limit }),
+  })
+  if (!res.ok) throw new Error(`Search failed: HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function importPaper(result) {
+  const res = await fetch(`${BASE}/discovery/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: result.title,
+      pdf_url: result.pdf_url,
+      source_id: result.id,
+      authors: result.authors || [],
+      year: result.year || null,
+      venue: result.venue || null,
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Import failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
