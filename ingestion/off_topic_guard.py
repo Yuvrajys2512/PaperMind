@@ -22,10 +22,10 @@ _SYSTEM = (
 )
 
 _OFF_TOPIC_REPLY = (
-    "I'm built to answer questions about the research paper you've loaded — "
-    "things like methodology, results, contributions, and comparisons. "
-    "That question is outside what I can help with here. "
-    "Try asking something about the paper!"
+    "Haha, I wish I could help with that! But I'm a research paper nerd at heart — "
+    "I live and breathe methodology, results, and scientific contributions. "
+    "For scores, weather, and the rest of life's important questions, you'll need "
+    "to look elsewhere. Now, got anything you want to dig into from the paper? I'm all yours!"
 )
 
 
