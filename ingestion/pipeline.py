@@ -34,6 +34,7 @@ from ingestion.compare_retriever import compare_retrieve
 from ingestion.reranker          import rerank
 from ingestion.query_planner     import plan_query
 from ingestion.llm_client        import reset_stats, get_stats
+from ingestion.off_topic_guard   import check as off_topic_check
 
 CONFIDENCE_THRESHOLD = 50
 
@@ -79,6 +80,31 @@ def answer_query(query: str, paper_name: str, request_id: str = None, on_progres
     """
     reset_stats()
     t_start         = time.monotonic()
+
+    # ── Off-topic guard ───────────────────────────────────────────────────────
+    is_off_topic, off_topic_msg = off_topic_check(query)
+    if is_off_topic:
+        duration_ms = round((time.monotonic() - t_start) * 1000)
+        return {
+            "query":            query,
+            "answer":           off_topic_msg,
+            "reasoning_chain":  "",
+            "confidence":       0,
+            "faithfulness":     0.0,
+            "answer_relevancy": 0.0,
+            "attempts":         0,
+            "passed":           False,
+            "warning":          "off_topic",
+            "failure_type":     "off_topic",
+            "sources":          [],
+            "query_used":       query,
+            "grading":          {"kept": 0, "removed": 0, "grades": []},
+            "plan":             {},
+            "llm_calls":        get_stats()["call_count"],
+            "providers_used":   get_stats()["providers"],
+            "duration_ms":      duration_ms,
+        }
+
     best_result     = None
     best_confidence = -1
     failure_type    = None

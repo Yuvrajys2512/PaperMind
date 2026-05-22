@@ -46,7 +46,7 @@ async def import_paper(request: ImportRequest, background_tasks: BackgroundTasks
     if not request.pdf_url:
         raise HTTPException(status_code=400, detail="No PDF URL provided.")
     try:
-        paper_id = await download_paper(request.pdf_url, request.title)
+        paper_id = await download_paper(request.pdf_url, request.title, source_id=request.source_id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not download PDF: {exc}")
     background_tasks.add_task(_run_ingestion, paper_id)

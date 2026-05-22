@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from 'react'
-import { uploadPaper, getPaperStatus } from '../api'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { uploadPaper, getPaperStatus, listPapers } from '../api'
 
 /* ─────────────────────────────────────────────────────────────────
    COSMIC ORBS  (same as ChatPage)
@@ -18,13 +18,18 @@ function CosmicOrbs() {
 /* ─────────────────────────────────────────────────────────────────
    UPLOAD PAGE
 ───────────────────────────────────────────────────────────────── */
-export default function UploadPage({ onPaperReady, onDiscover }) {
+export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
   const [dragging, setDragging]             = useState(false)
   const [phase, setPhase]                   = useState('idle') // idle | uploading | processing | error
   const [filename, setFilename]             = useState('')
   const [error, setError]                   = useState('')
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [paperCount, setPaperCount]         = useState(null)
   const inputRef = useRef()
+
+  useEffect(() => {
+    listPapers().then(papers => setPaperCount(papers.filter(p => p.status === 'ready').length)).catch(() => {})
+  }, [])
 
   const handleFile = useCallback(async (file) => {
     if (!file || !file.name.endsWith('.pdf')) {
@@ -379,28 +384,54 @@ export default function UploadPage({ onPaperReady, onDiscover }) {
         )}
       </div>
 
-      {/* ── DISCOVER LINK ── */}
-      {(phase === 'idle' || phase === 'error') && onDiscover && (
+      {/* ── SECONDARY ACTIONS ── */}
+      {(phase === 'idle' || phase === 'error') && (
         <div className="relative z-10 mt-5 flex items-center gap-3">
           <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.04)' }} />
-          <button
-            onClick={onDiscover}
-            className="flex items-center gap-2 px-4 py-2 rounded-full text-xs transition-all duration-200 hover:text-violet-300"
-            style={{
-              background: 'rgba(167,139,250,0.05)',
-              border: '1px solid rgba(167,139,250,0.12)',
-              color: '#8b5cf6',
-            }}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            Discover papers from arXiv &amp; Semantic Scholar
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-2">
+            {onDiscover && (
+              <button
+                onClick={onDiscover}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs transition-all duration-200 hover:text-violet-300"
+                style={{
+                  background: 'rgba(167,139,250,0.05)',
+                  border: '1px solid rgba(167,139,250,0.12)',
+                  color: '#8b5cf6',
+                }}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                Discover Papers
+              </button>
+            )}
+            {onLibrary && (
+              <button
+                onClick={onLibrary}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs transition-all duration-200 hover:text-cyan-300"
+                style={{
+                  background: 'rgba(0,245,255,0.04)',
+                  border: '1px solid rgba(0,245,255,0.10)',
+                  color: '#67e8f9',
+                }}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                    d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                My Library
+                {paperCount > 0 && (
+                  <span
+                    className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                    style={{ background: 'rgba(0,245,255,0.15)', color: '#22d3ee' }}
+                  >
+                    {paperCount}
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
           <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.04)' }} />
         </div>
       )}

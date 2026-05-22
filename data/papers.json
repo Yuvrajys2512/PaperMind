@@ -135,12 +135,12 @@
     "completed_at": "2026-05-22T07:52:38.006738+00:00",
     "error": null
   },
-  "c7721a5b-3bc0-45b7-980d-4a80f22a47ac": {
-    "paper_id": "c7721a5b-3bc0-45b7-980d-4a80f22a47ac",
-    "filename": "FAIR-RAG: Faithful Adaptive Iterative Refinement for Retrieval-Augmented Generat.pdf",
+  "a78d2cf9-d556-4c6b-989f-ad3605277ebc": {
+    "paper_id": "a78d2cf9-d556-4c6b-989f-ad3605277ebc",
+    "filename": "Attention is all you need.pdf",
     "status": "ready",
-    "uploaded_at": "2026-05-22T21:48:38.649505+00:00",
-    "completed_at": "2026-05-22T21:49:22.461944+00:00",
+    "uploaded_at": "2026-05-22T22:04:51.249426+00:00",
+    "completed_at": "2026-05-22T22:05:21.455468+00:00",
     "error": null
   }
 }

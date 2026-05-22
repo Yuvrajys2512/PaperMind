@@ -31,12 +31,12 @@ def _save_registry(registry: dict):
     os.replace(tmp, REGISTRY_FILE)
 
 
-def create_paper_record(original_filename: str) -> str:
+def create_paper_record(original_filename: str, source_id: str = None) -> str:
     """Creates a new paper entry with status 'processing'. Returns the paper_id."""
     paper_id = str(uuid.uuid4())
     with _registry_lock:
         registry = _load_registry()
-        registry[paper_id] = {
+        record = {
             "paper_id": paper_id,
             "filename": original_filename,
             "status": "processing",
@@ -44,6 +44,9 @@ def create_paper_record(original_filename: str) -> str:
             "completed_at": None,
             "error": None,
         }
+        if source_id:
+            record["source_id"] = source_id
+        registry[paper_id] = record
         _save_registry(registry)
     return paper_id
 

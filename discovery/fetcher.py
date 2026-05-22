@@ -8,10 +8,10 @@ _HEADERS = {
 }
 
 
-async def download_paper(pdf_url: str, title: str) -> str:
+async def download_paper(pdf_url: str, title: str, source_id: str = None) -> str:
     """Download a PDF from pdf_url, register it, and return the new paper_id."""
     safe_name = (title[:80].strip() or "paper") + ".pdf"
-    paper_id = create_paper_record(safe_name)
+    paper_id = create_paper_record(safe_name, source_id=source_id)
     pdf_path = get_paper_pdf_path(paper_id)
 
     async with httpx.AsyncClient(

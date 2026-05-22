@@ -1,5 +1,15 @@
-import { useState, useRef, useCallback } from 'react'
-import { searchPapers, importPaper, getPaperStatus } from '../api'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { searchPapers, importPaper, getPaperStatus, listPapers } from '../api'
+
+const HISTORY_KEY = 'papermind_search_history'
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]') } catch { return [] }
+}
+function addToHistory(q) {
+  const next = [q, ...getHistory().filter(h => h !== q)].slice(0, 5)
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+}
+function clearHistory() { localStorage.removeItem(HISTORY_KEY) }
 
 function CosmicOrbs() {
   return (
@@ -34,9 +44,9 @@ function SourceBadge({ source }) {
 }
 
 /* ── Single result card ───────────────────────────────────────── */
-function PaperCard({ result, importState, onImport, onGoToChat }) {
+function PaperCard({ result, importState, onImport, onGoToChat, inLibrary }) {
   const hasPdf = Boolean(result.pdf_url)
-  const state  = importState || 'idle'
+  const state  = inLibrary && importState !== 'ready' ? 'in_library' : (importState || 'idle')
 
   const buttonContent = () => {
     if (state === 'downloading') return (
@@ -61,12 +71,20 @@ function PaperCard({ result, importState, onImport, onGoToChat }) {
         Open in Chat
       </span>
     )
+    if (state === 'in_library') return (
+      <span className="flex items-center gap-1.5">
+        <svg className="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+        </svg>
+        Already in Library
+      </span>
+    )
     if (state === 'failed') return 'Failed — retry?'
     if (!hasPdf) return 'No PDF available'
     return 'Import to Library'
   }
 
-  const buttonDisabled = !hasPdf && state === 'idle'
+  const buttonDisabled = (!hasPdf && state === 'idle') || state === 'in_library'
   const buttonActive   = hasPdf && (state === 'idle' || state === 'failed')
 
   return (
@@ -143,7 +161,15 @@ function PaperCard({ result, importState, onImport, onGoToChat }) {
         title={!hasPdf ? 'No open-access PDF available for this paper' : undefined}
         className="mt-auto w-full py-2 rounded-xl text-xs font-semibold transition-all duration-200"
         style={
-          state === 'ready'
+          state === 'in_library'
+            ? {
+                background: 'rgba(52,211,153,0.05)',
+                border: '1px solid rgba(52,211,153,0.15)',
+                color: '#6ee7b7',
+                cursor: 'default',
+                opacity: 0.7,
+              }
+            : state === 'ready'
             ? {
                 background: 'rgba(52,211,153,0.12)',
                 border: '1px solid rgba(52,211,153,0.3)',
@@ -186,25 +212,36 @@ function PaperCard({ result, importState, onImport, onGoToChat }) {
 }
 
 /* ── Main page ────────────────────────────────────────────────── */
-export default function DiscoverPage({ onPaperReady, onBack }) {
+export default function DiscoverPage({ onPaperReady, onBack, onLibrary }) {
   const [query, setQuery]         = useState('')
   const [phase, setPhase]         = useState('idle')  // idle | searching | results | empty | error
   const [results, setResults]     = useState([])
   const [searchError, setSearchError] = useState('')
-  // Map of result.id → { state: 'idle'|'downloading'|'processing'|'ready'|'failed', paperId }
   const [importStates, setImportStates] = useState({})
+  const [librarySourceIds, setLibrarySourceIds] = useState(new Set())
+  const [history, setHistory]     = useState(getHistory)
   const inputRef = useRef()
+
+  // Load library source_ids on mount to power "already in library" badges
+  useEffect(() => {
+    listPapers().then(papers => {
+      setLibrarySourceIds(new Set(papers.map(p => p.source_id).filter(Boolean)))
+    }).catch(() => {})
+  }, [])
 
   const setImportState = (id, patch) =>
     setImportStates(prev => ({ ...prev, [id]: { ...(prev[id] || {}), ...patch } }))
 
-  const handleSearch = useCallback(async () => {
-    const q = query.trim()
+  const handleSearch = useCallback(async (overrideQuery) => {
+    const q = (overrideQuery ?? query).trim()
     if (!q) return
+    if (overrideQuery !== undefined) setQuery(overrideQuery)
     setPhase('searching')
     setResults([])
     setImportStates({})
     setSearchError('')
+    addToHistory(q)
+    setHistory(getHistory())
     try {
       const data = await searchPapers(q, 24)
       if (!data.results?.length) {
@@ -309,7 +346,23 @@ export default function DiscoverPage({ onPaperReady, onBack }) {
           </p>
         </div>
 
-        <div className="ml-auto w-12" /> {/* balance flex */}
+        {onLibrary && (
+          <button
+            onClick={onLibrary}
+            className="ml-auto flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full transition-all"
+            style={{
+              background: 'rgba(0,245,255,0.06)',
+              border: '1px solid rgba(0,245,255,0.14)',
+              color: '#67e8f9',
+            }}
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+            Library
+          </button>
+        )}
       </div>
 
       {/* ── SEARCH BAR ── */}
@@ -422,27 +475,62 @@ export default function DiscoverPage({ onPaperReady, onBack }) {
 
         {/* Idle hint */}
         {phase === 'idle' && (
-          <div className="flex flex-col items-center py-16 gap-4 text-center">
-            <div className="flex gap-3 flex-wrap justify-center">
-              {[
-                'attention mechanism transformers',
-                'RAG retrieval augmented generation',
-                'diffusion models image synthesis',
-                'RLHF alignment language models',
-              ].map(hint => (
-                <button
-                  key={hint}
-                  onClick={() => { setQuery(hint); setTimeout(handleSearch, 0) }}
-                  className="px-3 py-1.5 rounded-full text-[10px] text-gray-600 transition-all duration-200 hover:text-gray-400"
-                  style={{
-                    background: 'rgba(255,255,255,0.02)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                  }}
-                >
-                  {hint}
-                </button>
-              ))}
+          <div className="flex flex-col items-center py-16 gap-5 text-center">
+            {/* Search history */}
+            {history.length > 0 && (
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[9px] uppercase tracking-[0.15em] text-gray-700">Recent</span>
+                  <button
+                    onClick={() => { clearHistory(); setHistory([]) }}
+                    className="text-[9px] text-gray-700 hover:text-gray-500 transition-colors"
+                  >
+                    clear
+                  </button>
+                </div>
+                <div className="flex gap-2 flex-wrap justify-center">
+                  {history.map(h => (
+                    <button
+                      key={h}
+                      onClick={() => handleSearch(h)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] text-gray-500 hover:text-gray-300 transition-all duration-200"
+                      style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}
+                    >
+                      <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      {h}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Suggestions */}
+            <div className="flex flex-col items-center gap-2">
+              {history.length > 0 && (
+                <span className="text-[9px] uppercase tracking-[0.15em] text-gray-700">Suggestions</span>
+              )}
+              <div className="flex gap-2 flex-wrap justify-center">
+                {[
+                  'attention mechanism transformers',
+                  'RAG retrieval augmented generation',
+                  'diffusion models image synthesis',
+                  'RLHF alignment language models',
+                ].map(hint => (
+                  <button
+                    key={hint}
+                    onClick={() => handleSearch(hint)}
+                    className="px-3 py-1.5 rounded-full text-[10px] text-gray-600 hover:text-gray-400 transition-all duration-200"
+                    style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}
+                  >
+                    {hint}
+                  </button>
+                ))}
+              </div>
             </div>
+
             <p className="text-gray-700 text-xs">Type a topic or click a suggestion to start</p>
           </div>
         )}
@@ -461,6 +549,7 @@ export default function DiscoverPage({ onPaperReady, onBack }) {
                   importState={importStates[result.id]?.state}
                   onImport={() => handleImport(result)}
                   onGoToChat={() => handleGoToChat(result.id)}
+                  inLibrary={librarySourceIds.has(result.id)}
                 />
               ))}
             </div>

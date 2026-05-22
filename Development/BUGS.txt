@@ -1,0 +1,3 @@
+Fix Semantic Scholar results — right now every search returns only arXiv papers. S2 has citation    
+  counts, broader coverage (not just CS), and venue info. It's probably a rate limit or API response
+  issue — a 30-min debug session to get both sources working doubles the value of every search. 
