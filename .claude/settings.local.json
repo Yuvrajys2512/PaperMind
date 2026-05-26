@@ -28,7 +28,8 @@
       "Bash(grep -E \"^d|\\\\.py$|\\\\.json$|\\\\.md$\")",
       "Bash(python -c \"from discovery.router import router; print\\('router OK, routes:', [r.path for r in router.routes]\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('api/main.py'\\).read\\(\\)\\); print\\('main.py OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('ingestion/pipeline.py'\\).read\\(\\)\\); ast.parse\\(open\\('ingestion/off_topic_guard.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('ingestion/pipeline.py'\\).read\\(\\)\\); ast.parse\\(open\\('ingestion/off_topic_guard.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(dir /b \"C:\\\\Users\\\\Yuvraj Srivastava\\\\Desktop\\\\Projects\\\\PaperMind\")"
     ]
   }
 }
