@@ -8,3 +8,6 @@ progress.txt
 # QASPER eval dataset — reproducible via eval/qasper_loader.py
 data/qasper/
 
+# Eval run outputs (JSONL rows + summaries)
+eval/results/
+
