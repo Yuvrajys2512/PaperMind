@@ -188,6 +188,34 @@ def _strip_chunk_refs(text: str) -> str:
     return text.strip()
 
 
+def _strip_scaffolding(answer: str) -> str:
+    """Remove leaked prompt scaffolding that some models (notably Llama-3.3-70B)
+    echo before the real answer — a '## FINAL ANSWER FORMAT' header and filler
+    preambles like 'Now writing the final answer.'
+
+    The answer proper begins at the ESSENCE marker, so when it is present we
+    anchor there and drop everything before it. Otherwise we peel off known
+    scaffolding lines from the top.
+    """
+    import re
+    m = re.search(r'\*{0,2}ESSENCE', answer)
+    if m:
+        return answer[m.start():].strip()
+
+    lines = answer.splitlines()
+    while lines:
+        head = lines[0].strip().lower()
+        if (not head
+                or "final answer format" in head
+                or head.startswith(("now writing", "now i will write",
+                                    "here is the final answer",
+                                    "here is my final answer"))):
+            lines.pop(0)
+            continue
+        break
+    return "\n".join(lines).strip()
+
+
 def _extract_reasoning_and_answer(full_response: str) -> tuple[str, str]:
     """
     Splits the model's output into reasoning_chain and answer.
@@ -200,8 +228,8 @@ def _extract_reasoning_and_answer(full_response: str) -> tuple[str, str]:
     if m:
         reasoning_chain = full_response[: m.end()].strip()
         answer          = full_response[m.end() :].strip()
-        return reasoning_chain, answer
-    return "", full_response.strip()
+        return reasoning_chain, _strip_scaffolding(answer)
+    return "", _strip_scaffolding(full_response.strip())
 
 
 # ---------------------------------------------------------------------------
