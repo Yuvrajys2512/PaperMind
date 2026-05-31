@@ -14,8 +14,16 @@ def build_bm25_index(paper_name: str):
     if paper_name in _bm25_cache:
         return _bm25_cache[paper_name]
 
+    # Collections are stored under a cleaned name (see embedder.py / retriever.py).
+    # Clean here too, otherwise paper IDs containing non-alphanumerics — e.g. the
+    # arXiv-style "1912.01214" — never match their stored collection.
+    clean_name = "".join(
+        c if c.isalnum() or c == "-" else "-"
+        for c in paper_name
+    ).strip("-").lower()
+
     client = chromadb.PersistentClient(path="data/chroma_db")
-    collection = client.get_collection(name=paper_name)
+    collection = client.get_collection(name=clean_name)
 
     results = collection.get(include=["documents", "metadatas"])
 

@@ -1,0 +1,1 @@
+"""PaperMind evaluation harness (QASPER)."""
