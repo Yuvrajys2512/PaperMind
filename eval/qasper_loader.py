@@ -76,6 +76,21 @@ def load_papers(split: str = "dev") -> dict:
         return json.load(f)
 
 
+def select_papers(papers: dict, n: int) -> list[tuple[str, dict]]:
+    """Deterministic first-``n`` papers that have both questions and body text.
+
+    Shared by the eval runner and the ablation orchestrator so every config is
+    scored on the identical paper/question set.
+    """
+    picked = []
+    for pid, paper in papers.items():
+        if paper.get("qas") and paper.get("full_text"):
+            picked.append((pid, paper))
+        if len(picked) >= n:
+            break
+    return picked
+
+
 def normalize_answer(answer_entry: dict) -> dict:
     """Collapse one annotator's QASPER answer object into a flat record.
 

@@ -35,7 +35,7 @@ try:
 except Exception:
     pass
 
-from eval.qasper_loader import load_papers, iter_questions
+from eval.qasper_loader import load_papers, iter_questions, select_papers
 from eval.qasper_adapter import ingest_qasper_paper
 from eval import metrics
 from ingestion.pipeline import answer_query
@@ -143,7 +143,9 @@ def summarize(rows: list[dict]) -> dict:
         "evidence_recall": _mean([r["evidence_recall"] for r in rows]),
         "evidence_f1": _mean([r["evidence_f1"] for r in rows]),
         "mean_confidence": _mean([r["confidence"] for r in rows]),
+        "mean_faithfulness": _mean([r["faithfulness"] for r in rows]),
         "mean_duration_ms": _mean([float(r["duration_ms"]) for r in rows if r["duration_ms"]]),
+        "mean_llm_calls": _mean([float(r["llm_calls"]) for r in rows if r["llm_calls"] is not None]),
         "by_type": {},
     }
 
@@ -192,17 +194,14 @@ def main() -> None:
     ap.add_argument("--topk", type=int, default=10, help="evidence retrieval depth")
     ap.add_argument("--judge", action="store_true", help="enable LLM-as-judge")
     ap.add_argument("--no-evidence", action="store_true", help="skip evidence scoring")
+    ap.add_argument("--skip-ingest", action="store_true",
+                    help="assume papers already in the vector store (set by the ablation runner)")
     ap.add_argument("--out", default=None, help="JSONL output path")
     args = ap.parse_args()
 
     print(f"[eval] loading QASPER {args.split} split ...")
     papers = load_papers(args.split)
-    picked = []
-    for pid, paper in papers.items():
-        if paper.get("qas") and paper.get("full_text"):
-            picked.append((pid, paper))
-        if len(picked) >= args.papers:
-            break
+    picked = select_papers(papers, args.papers)
 
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -212,11 +211,14 @@ def main() -> None:
     print(f"[eval] {len(picked)} papers | judge={args.judge} | evidence={not args.no_evidence}")
     with open(out_path, "w", encoding="utf-8") as fout:
         for pid, paper in picked:
-            print(f"\n[eval] ingesting {pid} — {(paper.get('title') or '')[:70]}")
-            summary = ingest_qasper_paper(pid, paper)
-            if not summary["success"]:
-                print(f"[eval]   SKIP (ingest failed): {summary.get('error')}")
-                continue
+            if args.skip_ingest:
+                print(f"\n[eval] {pid} — {(paper.get('title') or '')[:70]} (skip-ingest)")
+            else:
+                print(f"\n[eval] ingesting {pid} — {(paper.get('title') or '')[:70]}")
+                summary = ingest_qasper_paper(pid, paper)
+                if not summary["success"]:
+                    print(f"[eval]   SKIP (ingest failed): {summary.get('error')}")
+                    continue
 
             for qi, (question, qid, answers) in enumerate(iter_questions(paper)):
                 if args.qs and qi >= args.qs:

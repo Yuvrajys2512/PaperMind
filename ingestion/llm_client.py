@@ -55,7 +55,11 @@ if os.getenv("GEMINI_API_KEY"):
             api_key  = os.getenv("GEMINI_API_KEY"),
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/",
         ),
-        "model": "gemini-2.0-flash",
+        # gemini-2.0-flash has free-tier quota 0 (every call 429s with
+        # RESOURCE_EXHAUSTED limit:0). 2.5-flash-lite has real free quota, is
+        # fast (~1s), and — unlike 2.5-flash — does not burn the token budget on
+        # "thinking", so it won't truncate planning JSON / answers.
+        "model": "gemini-2.5-flash-lite",
     })
 
 if os.getenv("CEREBRAS_API_KEY"):
