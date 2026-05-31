@@ -69,7 +69,7 @@ if os.getenv("CEREBRAS_API_KEY"):
             api_key  = os.getenv("CEREBRAS_API_KEY"),
             base_url = "https://api.cerebras.ai/v1",
         ),
-        "model": "llama3.1-8b",
+        "model": "gpt-oss-120b",
     })
 
 if os.getenv("MISTRAL_API_KEY"):
@@ -143,7 +143,12 @@ def chat_completion(
                 max_tokens  = max_tokens,
                 temperature = temperature,
             )
-            text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if content is None:
+                print(f"[llm_client] {provider['name']} returned null content — trying next provider...")
+                last_error = ValueError("null content")
+                continue
+            text = content.strip()
             print(f"[llm_client] Used: {provider['name']}")
             s = getattr(_stats_local, "stats", None)
             if s is not None:
