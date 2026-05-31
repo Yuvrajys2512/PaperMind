@@ -86,7 +86,7 @@ def plan_query(query: str) -> dict:
             {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
             {"role": "user",   "content": f"Question: {query}"}
         ],
-        max_tokens=200,
+        max_tokens=400,    # worst-case plan JSON is ~184 tokens; 400 gives headroom for verbose providers
         temperature=0.0,   # deterministic — planning should be stable
     )
 

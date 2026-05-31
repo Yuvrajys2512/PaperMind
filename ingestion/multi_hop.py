@@ -50,7 +50,7 @@ def decompose_query(query: str) -> list[str]:
                 {"role": "system", "content": DECOMPOSE_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Question: {query}"}
             ],
-            max_tokens=200,
+            max_tokens=400,    # 3 verbose sub-questions can exceed 200; 400 gives headroom
             temperature=0.1,
         )
 
