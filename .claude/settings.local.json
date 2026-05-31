@@ -47,7 +47,22 @@
       "Bash(venv/Scripts/python.exe -m eval.run_ablations --papers 1 --qs 1 --configs full,baseline,no_grader)",
       "Bash(venv/Scripts/python.exe -m eval.run_ablations --papers 3 --qs 5 --judge)",
       "Bash(Get-Content *)",
-      "PowerShell(Get-Process *)"
+      "PowerShell(Get-Process *)",
+      "Bash(venv/Scripts/python.exe -m eval.run_ablations --papers 10 --qs 10 --judge)",
+      "Bash(venv/Scripts/python.exe -m eval.run_ablations --papers 5 --qs 8 --judge --configs full,baseline,no_grader)",
+      "Bash(venv/Scripts/python.exe -c 'import re *)",
+      "Bash(venv/Scripts/python.exe -m eval.analyze_grader --papers 5 --qs 6)",
+      "Bash(venv/Scripts/python.exe -m eval.analyze_grader --papers 5 --qs 6 --gen-model llama-3.3-70b-versatile)",
+      "Bash(venv/Scripts/python.exe -m eval.analyze_grader --papers 5 --qs 6 --gen-model llama-3.1-8b-instant)",
+      "Bash(git --no-pager diff --stat HEAD)",
+      "Bash(git --no-pager diff -- ingestion/generator.py)",
+      "Bash(git --no-pager show --stat 6235832)",
+      "Bash(git --no-pager grep -n \"def chat_completion\" -- ingestion/llm_client.py)",
+      "Bash(git --no-pager diff -- .claude/settings.local.json)",
+      "Bash(git --no-pager diff --stat -- eval/analyze_grader.py)",
+      "Bash(Select-String -NotMatch \"chroma_db\")",
+      "PowerShell($p = \"C:\\\\Users\\\\Yuvraj Srivastava\\\\.claude\\\\projects\\\\C--Users-Yuvraj-Srivastava-Desktop-Projects-PaperMind\\\\memory\\\\MEMORY.md\"; $bytes = [System.IO.File]::ReadAllBytes\\($p\\); Write-Output \"First 4 bytes: $\\($bytes[0..3] -join ','\\)\"; Write-Output \"Length: $\\($bytes.Length\\)\"; Write-Output \"=== content ===\"; [System.IO.File]::ReadAllText\\($p\\))",
+      "PowerShell($p = \"C:\\\\Users\\\\Yuvraj Srivastava\\\\.claude\\\\projects\\\\C--Users-Yuvraj-Srivastava-Desktop-Projects-PaperMind\\\\memory\\\\MEMORY.md\"; \\(Get-Item $p\\) | Select-Object Length, LastWriteTime)"
     ]
   }
 }

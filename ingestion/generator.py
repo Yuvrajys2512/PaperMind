@@ -281,6 +281,14 @@ Question: {query}
 Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → \
 [UNCERTAINTY] → [STRUCTURE] → [WRITE], then write the final answer."""
 
+    # Experiments can pin the generation model (only) via PAPERMIND_GEN_MODEL,
+    # e.g. "llama-3.1-8b-instant" (weak) vs "llama-3.3-70b-versatile" (strong),
+    # to study how generator strength affects the evidence grader. Grading and
+    # judging stay on the normal provider chain.
+    import os
+    _gen_model = os.getenv("PAPERMIND_GEN_MODEL")
+    _pin = ("Groq-1", _gen_model) if _gen_model else None
+
     full_output = chat_completion(
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -288,6 +296,7 @@ Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → 
         ],
         max_tokens=2048,
         temperature=0.1,
+        pin=_pin,
     )
 
     reasoning_chain, answer = _extract_reasoning_and_answer(full_output)
