@@ -138,6 +138,7 @@ def chat_completion(
     messages:    list[dict],
     max_tokens:  int   = 1000,
     temperature: float = 0.1,
+    pin:         tuple[str, str] | None = None,
 ) -> str:
     """
     Send a chat completion request, automatically falling back through
@@ -146,12 +147,25 @@ def chat_completion(
     Unexpected errors (network failures, bad auth) are re-raised immediately
     rather than silently swallowed.
 
+    pin : optional (provider_name, model_id). When set, the call is forced onto
+          that single provider+model with NO cross-provider fallback — so the
+          model is held fixed. Used by experiments (e.g. weak-vs-strong
+          generator) that must control which model produced the output.
+
     Returns the model's response text.
     Raises RuntimeError if ALL providers are rate-limited / exhausted.
     """
     last_error = None
 
-    for provider in _PROVIDERS:
+    providers = _PROVIDERS
+    if pin is not None:
+        name, model = pin
+        base = next((p for p in _PROVIDERS if p["name"] == name), None)
+        if base is None:
+            raise RuntimeError(f"[llm_client] pinned provider '{name}' is not configured")
+        providers = [{**base, "model": model}]
+
+    for provider in providers:
         try:
             response = provider["client"].chat.completions.create(
                 model       = provider["model"],
