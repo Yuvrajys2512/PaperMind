@@ -88,7 +88,17 @@ def main() -> None:
                 if not answers or not metrics.gold_is_answerable(answers):
                     continue
 
-                res = answer_query(question, pid)
+                try:
+                    res = answer_query(question, pid)
+                except Exception as exc:
+                    print(f"[grader] SKIP  {_clip(question, 55)} ({exc})")
+                    continue
+                # Pipeline swallows generation errors and returns a graceful
+                # degradation answer (confidence=0, warning set). Skip these —
+                # scoring a fallback string against gold is meaningless.
+                if res.get("confidence", 100) == 0.0 and res.get("warning"):
+                    print(f"[grader] SKIP  {_clip(question, 55)} (pipeline degradation: {res['warning'][:60]})")
+                    continue
                 cleaned = res.get("answer", "")
                 original = res.get("original_answer", "") or cleaned
                 grades = res.get("grading", {}).get("grades", [])

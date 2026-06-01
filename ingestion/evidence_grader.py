@@ -59,6 +59,12 @@ RULES:
     date, result) that does not appear in any chunk, mark it UNSUPPORTED.
   - Hedged inferences ("This suggests...", "This implies...") are INFERRED
     only if the underlying fact IS in the chunks.
+  - NEGATIVE / ABSENCE CLAIMS: If a sentence states that the paper does NOT
+    do or mention something (e.g. "No, the paper does not mention X", "The
+    authors did not use Y", "There is no mention of Z"), grade it INFERRED —
+    never UNSUPPORTED. Absence of X in the retrieved chunks is itself evidence
+    that X is absent from the paper. Only mark such a sentence UNSUPPORTED if
+    a chunk explicitly contradicts it (i.e. a chunk actually mentions X).
 
 Return ONLY a JSON array — no markdown, no preamble:
 
@@ -100,6 +106,34 @@ def _split_sentences(text: str) -> list[str]:
             if len(part) > 15:
                 sentences.append(part)
     return sentences
+
+
+# ---------------------------------------------------------------------------
+# Negation pre-classifier
+# ---------------------------------------------------------------------------
+
+# Sentence-start patterns that signal a negative / absence answer.
+# These cannot have direct chunk support by definition (absence of X is never
+# explicitly stated in a chunk about X's alternatives), so pre-classifying
+# them as INFERRED prevents the LLM from incorrectly marking them UNSUPPORTED.
+_NEGATION_STARTS = (
+    "no,", "no.", "no —", "no -",
+    "the paper does not", "the paper doesn't", "the paper did not",
+    "the authors do not", "the authors don't", "the authors did not",
+    "the study does not", "the study didn't", "the study did not",
+    "there is no mention", "there is no ", "there are no ",
+    "it does not", "it doesn't", "it did not",
+    "they do not", "they don't", "they did not",
+    "this is not mentioned", "this is not described", "this is not specified",
+    "not mentioned in", "not described in", "not specified in",
+    "not discussed in", "not provided in",
+)
+
+
+def _is_negation_sentence(sentence: str) -> bool:
+    """Return True if the sentence is a negative/absence claim about the paper."""
+    low = sentence.lower().strip()
+    return any(low.startswith(p) or low == p.rstrip(" .,") for p in _NEGATION_STARTS)
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +292,36 @@ def grade_answer(answer: str, chunks: list) -> dict:
             "grading_failed":  False,
         }
 
-    grades = _call_grader(sentences, chunks)
+    # Pre-classify negation/absence sentences as INFERRED without an LLM call.
+    # The LLM grader has a matching prompt rule, but this is a deterministic
+    # backstop so correct negative answers are never removed regardless of how
+    # the LLM interprets "strict" grading.
+    pre_grades: dict[str, dict] = {}
+    to_grade: list[str] = []
+    for sent in sentences:
+        if _is_negation_sentence(sent):
+            pre_grades[sent] = {"sentence": sent, "grade": "INFERRED", "chunk_ref": "negation"}
+        else:
+            to_grade.append(sent)
+
+    grades_from_llm = _call_grader(to_grade, chunks) if to_grade else []
+
+    # Merge: LLM grades for normal sentences + pre-classified grades for negations.
+    # Build a unified list in original sentence order.
+    if grades_from_llm is None:
+        grades = None
+    else:
+        llm_iter = iter(grades_from_llm)
+        grades = []
+        for sent in sentences:
+            if sent in pre_grades:
+                grades.append(pre_grades[sent])
+            else:
+                try:
+                    grades.append(next(llm_iter))
+                except StopIteration:
+                    # LLM returned fewer grades than sentences — treat remainder as INFERRED
+                    grades.append({"sentence": sent, "grade": "INFERRED", "chunk_ref": "none"})
 
     if grades is None:
         print("[evidence_grader] Grading failed — returning original answer unchanged.")

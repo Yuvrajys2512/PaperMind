@@ -70,7 +70,8 @@
       "Bash(git --no-pager log --oneline -1 -- research/to_do.md)",
       "Bash(git --no-pager log --oneline -1 -- ingestion/generator.py)",
       "PowerShell(Write-Output \"hello-test\"; \\(Get-Location\\).Path)",
-      "Bash(git --no-pager log --oneline -2)"
+      "Bash(git --no-pager log --oneline -2)",
+      "Bash(venv/Scripts/python.exe -m eval.run_ablations --papers 5 --qs 6)"
     ]
   }
 }

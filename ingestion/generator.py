@@ -286,8 +286,16 @@ Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → 
     # to study how generator strength affects the evidence grader. Grading and
     # judging stay on the normal provider chain.
     import os
+    # Pin generation to Groq-2 (separate TPM quota from Groq-1) so generation
+    # calls don't compete with planning/HyDE/judging that run on the main chain.
+    # Falls back to Groq-1 if Groq-2 is not configured.
     _gen_model = os.getenv("PAPERMIND_GEN_MODEL")
-    _pin = ("Groq-1", _gen_model) if _gen_model else None
+    if _gen_model:
+        from ingestion.llm_client import _PROVIDERS as _all_providers
+        _groq2 = next((p["name"] for p in _all_providers if p["name"] == "Groq-2"), None)
+        _pin = (_groq2 if _groq2 else "Groq-1", _gen_model)
+    else:
+        _pin = None
 
     full_output = chat_completion(
         messages=[
