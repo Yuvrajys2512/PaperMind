@@ -62,7 +62,15 @@
       "Bash(git --no-pager diff --stat -- eval/analyze_grader.py)",
       "Bash(Select-String -NotMatch \"chroma_db\")",
       "PowerShell($p = \"C:\\\\Users\\\\Yuvraj Srivastava\\\\.claude\\\\projects\\\\C--Users-Yuvraj-Srivastava-Desktop-Projects-PaperMind\\\\memory\\\\MEMORY.md\"; $bytes = [System.IO.File]::ReadAllBytes\\($p\\); Write-Output \"First 4 bytes: $\\($bytes[0..3] -join ','\\)\"; Write-Output \"Length: $\\($bytes.Length\\)\"; Write-Output \"=== content ===\"; [System.IO.File]::ReadAllText\\($p\\))",
-      "PowerShell($p = \"C:\\\\Users\\\\Yuvraj Srivastava\\\\.claude\\\\projects\\\\C--Users-Yuvraj-Srivastava-Desktop-Projects-PaperMind\\\\memory\\\\MEMORY.md\"; \\(Get-Item $p\\) | Select-Object Length, LastWriteTime)"
+      "PowerShell($p = \"C:\\\\Users\\\\Yuvraj Srivastava\\\\.claude\\\\projects\\\\C--Users-Yuvraj-Srivastava-Desktop-Projects-PaperMind\\\\memory\\\\MEMORY.md\"; \\(Get-Item $p\\) | Select-Object Length, LastWriteTime)",
+      "Bash(git --no-pager log --oneline -3)",
+      "Bash(git --no-pager show --stat --oneline 6a9fd1a)",
+      "Bash(git --no-pager show --stat --format=\"\" 6a9fd1a -- ingestion/generator.py research/to_do.md eval/)",
+      "Bash(git --no-pager show 6a9fd1a --stat --format=\"%H%n%s\" -- ingestion/generator.py research/to_do.md)",
+      "Bash(git --no-pager log --oneline -1 -- research/to_do.md)",
+      "Bash(git --no-pager log --oneline -1 -- ingestion/generator.py)",
+      "PowerShell(Write-Output \"hello-test\"; \\(Get-Location\\).Path)",
+      "Bash(git --no-pager log --oneline -2)"
     ]
   }
 }

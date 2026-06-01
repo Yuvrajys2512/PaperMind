@@ -22,10 +22,8 @@ _Last updated: 2026-06-01. Goal: turn the QASPER ablation study into a workshop 
 
 ## Pending (uncommitted)
 
-- [ ] **Commit `ingestion/generator.py`** — the `PAPERMIND_GEN_MODEL` wiring that pins
-      generation only (`pin=("Groq-1", model)`). This is the piece commit `6235832`
-      described but didn't include.
-      Title: `feat(generator): pin generation model via PAPERMIND_GEN_MODEL (completes 6235832)`
+- [x] **Commit `ingestion/generator.py`** — the `PAPERMIND_GEN_MODEL` wiring that pins
+      generation only (`pin=("Groq-1", model)`). Done in commit `6a9fd1a`.
 
 ## Immediate next steps
 

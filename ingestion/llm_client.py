@@ -189,8 +189,8 @@ def chat_completion(
         except Exception as e:
             err_str = str(e).lower()
             if any(kw in err_str for kw in _SKIP_KEYWORDS):
-                print(f"[llm_client] {provider['name']} rate-limited "
-                      f"({type(e).__name__}) — trying next provider...")
+                print(f"[llm_client] {provider['name']} skipped "
+                      f"({type(e).__name__}: {str(e)[:120]}) — trying next provider...")
                 last_error = e
                 continue  # try the next provider
             raise  # unexpected error — surface it immediately
