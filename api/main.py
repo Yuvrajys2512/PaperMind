@@ -26,6 +26,7 @@ from api.logger import generate_request_id, log_query
 from ingestion.ingest_document import ingest_document
 from ingestion.bm25_retriever  import invalidate_bm25_cache
 from discovery.router import router as discovery_router
+from discovery.search  import search_papers
 
 app = FastAPI(
     title="PaperMind API",
@@ -125,6 +126,98 @@ def delete_paper(paper_id: str):
         print(f"[delete] BM25 cache invalidation failed for {paper_id}: {exc}")
 
     return {"deleted": paper_id}
+
+
+@app.get("/papers/{paper_id}/glossary")
+async def get_glossary(paper_id: str):
+    paper = get_paper(paper_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(status_code=400, detail="Paper not ready yet.")
+
+    loop = asyncio.get_running_loop()
+
+    def _extract():
+        from ingestion.retriever import retrieve
+        from ingestion.llm_client import chat_completion
+        chunks = retrieve("technical terms methods algorithms definitions equations notation", paper_id, top_k=10)
+        context = "\n\n---\n\n".join(c["text"][:600] for c in chunks)
+        raw = chat_completion(
+            messages=[{"role": "user", "content": (
+                "Extract every domain-specific technical term, acronym, and piece of jargon "
+                "from the passages below. For each, write a plain-English definition (1-2 sentences).\n\n"
+                "Return ONLY a JSON array — no markdown, no preamble:\n"
+                '[{"term":"...","definition":"...","category":"method|metric|dataset|concept|model"}]\n\n'
+                f"Passages:\n{context}"
+            )}],
+            max_tokens=1800,
+            temperature=0.1,
+        )
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw.strip())
+
+    try:
+        terms = await asyncio.wait_for(loop.run_in_executor(None, _extract), timeout=40.0)
+        return {"terms": terms}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Glossary extraction failed: {exc}")
+
+
+@app.get("/papers/{paper_id}/recommendations")
+async def get_recommendations(paper_id: str):
+    paper = get_paper(paper_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(status_code=400, detail="Paper not ready yet.")
+
+    loop = asyncio.get_running_loop()
+
+    def _get_queries():
+        from ingestion.retriever import retrieve
+        from ingestion.llm_client import chat_completion
+        chunks = retrieve("main contribution methodology results key findings", paper_id, top_k=5)
+        context = "\n\n".join(c["text"][:400] for c in chunks)
+        raw = chat_completion(
+            messages=[{"role": "user", "content": (
+                "Based on this research paper excerpt, generate 3 short academic search queries "
+                "to find closely related papers. Return ONLY a JSON array of strings.\n\n"
+                f"Paper excerpt:\n{context}"
+            )}],
+            max_tokens=150,
+            temperature=0.1,
+        )
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw.strip())
+
+    try:
+        queries = await asyncio.wait_for(loop.run_in_executor(None, _get_queries), timeout=20.0)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not extract topics: {exc}")
+
+    seen, results = set(), []
+    for q in queries[:3]:
+        try:
+            found = await search_papers(q, limit=5)
+            for r in found:
+                rid = r.get("id") or r.get("title", "")
+                if rid not in seen:
+                    seen.add(rid)
+                    r["search_query"] = q
+                    results.append(r)
+        except Exception:
+            continue
+
+    return {"results": results[:12], "queries": queries}
 
 
 class QueryRequest(BaseModel):

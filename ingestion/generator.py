@@ -316,6 +316,7 @@ Work through all six reasoning steps [INVENTORY] → [GAPS] → [INFERENCE] → 
             "section_type": c["metadata"].get("section_type", "text"),
             "page":         c["metadata"]["page_num"],
             "chunk_index":  c["metadata"].get("chunk_index", 0),
+            "text":         (c.get("text") or "")[:600],
         }
         for c in chunks
     ]

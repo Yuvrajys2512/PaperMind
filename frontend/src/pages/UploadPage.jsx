@@ -31,6 +31,32 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
     listPapers().then(papers => setPaperCount(papers.filter(p => p.status === 'ready').length)).catch(() => {})
   }, [])
 
+  const [stats, setStats] = useState([
+    { label: 'Avg Confidence', value: '—', sub: 'no sessions yet' },
+    { label: 'Faithfulness',   value: '—', sub: 'no sessions yet' },
+    { label: 'Multi-hop Rate', value: '—', sub: 'no sessions yet' },
+  ])
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('papermind_chats')
+      if (!saved) return
+      const msgs = Object.values(JSON.parse(saved))
+        .flat()
+        .filter(m => m.role === 'assistant' && m.content?.confidence != null)
+      if (msgs.length === 0) return
+      const avgConf  = msgs.reduce((s, m) => s + (m.content.confidence || 0), 0) / msgs.length
+      const avgFaith = msgs.reduce((s, m) => s + (m.content.faithfulness || 0), 0) / msgs.length
+      const multiHop = msgs.filter(m => m.content.plan?.complexity === 'multi_hop').length
+      const n = msgs.length
+      setStats([
+        { label: 'Avg Confidence', value: avgConf.toFixed(1) + '%',          sub: `across ${n} quer${n === 1 ? 'y' : 'ies'}` },
+        { label: 'Faithfulness',   value: (avgFaith * 100).toFixed(1) + '%', sub: 'evidence grading' },
+        { label: 'Multi-hop Rate', value: ((multiHop / n) * 100).toFixed(0) + '%', sub: 'of complex queries' },
+      ])
+    } catch {}
+  }, [])
+
   const handleFile = useCallback(async (file) => {
     if (!file || !file.name.endsWith('.pdf')) {
       setError('Please upload a PDF file.')
@@ -78,13 +104,6 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
 
   const onDragOver  = (e) => { e.preventDefault(); setDragging(true) }
   const onDragLeave = () => setDragging(false)
-
-  /* static stats */
-  const stats = [
-    { label: 'Avg Confidence', value: '73.4%',  sub: 'across 1.2k queries' },
-    { label: 'Evidence Grade', value: '94.1%',  sub: 'sentences kept' },
-    { label: 'Multi-hop Rate', value: '38%',    sub: 'of complex queries' },
-  ]
 
   return (
     <div className="min-h-screen cosmic-bg flex flex-col items-center justify-center px-4 pb-20"

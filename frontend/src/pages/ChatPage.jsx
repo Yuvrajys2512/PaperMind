@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { listPapers, deletePaper, queryPaperStream, comparePapersStream } from '../api'
+import { listPapers, deletePaper, queryPaperStream, comparePapersStream, getGlossary, getRecommendations } from '../api'
 import ReactMarkdown from 'react-markdown'
 
 /* ── COSMIC ORBS ─────────────────────────────────────────────────── */
@@ -54,9 +54,12 @@ function ToastContainer({ toasts, onDismiss }) {
 
 /* ── COMMAND PALETTE ─────────────────────────────────────────────── */
 const CMD_LIST = [
-  { id: 'upload',    label: 'Upload new paper',       icon: '↑' },
-  { id: 'compare',   label: 'Toggle compare mode',    icon: '⇔' },
-  { id: 'clear',     label: 'Clear conversation',     icon: '⌫' },
+  { id: 'upload',    label: 'Upload new paper',        icon: '↑' },
+  { id: 'compare',   label: 'Toggle compare mode',     icon: '⇔' },
+  { id: 'glossary',  label: 'Open jargon glossary',    icon: '§' },
+  { id: 'recommend', label: 'What to read next',       icon: '→' },
+  { id: 'flashcard', label: 'Export flashcards (Anki)', icon: '⊟' },
+  { id: 'clear',     label: 'Clear conversation',      icon: '⌫' },
   { id: 'workspace', label: 'Open workspace switcher', icon: '◫' },
 ]
 
@@ -162,20 +165,24 @@ function MetricRing({ label, value, isPercentage = false, accent = 'cyan' }) {
 }
 
 /* ── SPARK LINE ──────────────────────────────────────────────────── */
-function SparkLine({ confidence }) {
+function SparkLine({ scores }) {
   const pts = useMemo(() => {
-    const c = confidence || 50
-    const points = []
-    for (let i = 0; i <= 8; i++) {
-      const x = (i / 8) * 120
-      const y = 15 - Math.sin((i * Math.PI) / 4 + (c / 30)) * (c / 10) - Math.sin(i * 1.3) * 3
-      points.push(`${x.toFixed(1)},${Math.max(2, Math.min(28, y)).toFixed(1)}`)
+    const data = scores?.length >= 2 ? scores : null
+    if (!data) {
+      // Not enough history yet — flat line at midpoint
+      return '0,15 120,15'
     }
-    return points.join(' ')
-  }, [confidence])
+    return data.map((v, i) => {
+      const x = (i / (data.length - 1)) * 120
+      const y = 28 - ((Math.min(v, 100) / 100) * 26)   // 100 → y=2, 0 → y=28
+      return `${x.toFixed(1)},${Math.max(2, Math.min(28, y)).toFixed(1)}`
+    }).join(' ')
+  }, [scores])
+
+  const hasReal = scores?.length >= 2
 
   return (
-    <svg viewBox="0 0 120 30" className="flex-1" style={{ opacity: 0.35, maxWidth: 100 }}>
+    <svg viewBox="0 0 120 30" className="flex-1" style={{ opacity: hasReal ? 0.55 : 0.2, maxWidth: 100 }}>
       <polyline points={pts} fill="none" stroke="#00f5ff" strokeWidth="1.5"
         strokeLinecap="round" strokeLinejoin="round"
         style={{ filter: 'drop-shadow(0 0 3px rgba(0,245,255,0.7))' }} />
@@ -187,6 +194,15 @@ function SparkLine({ confidence }) {
 function SourceChip({ source }) {
   const isTable    = source.section_type === 'table'
   const paperLabel = source.paper_label
+  const hasText    = source.text?.trim().length > 0
+  const chipRef    = useRef()
+  const [tooltipPos, setTooltipPos] = useState(null)
+
+  const handleMouseEnter = () => {
+    if (!hasText) return
+    const rect = chipRef.current?.getBoundingClientRect()
+    if (rect) setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top })
+  }
 
   const labelBadge = paperLabel ? (
     <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{
@@ -196,21 +212,54 @@ function SourceChip({ source }) {
     }}>{paperLabel}</span>
   ) : null
 
-  if (isTable) return (
-    <div className="group flex items-center gap-2 bg-violet-500/10 hover:bg-violet-500/18 border border-violet-500/25 hover:border-violet-400/40 text-violet-300 hover:text-violet-200 text-[10px] px-3 py-1.5 rounded-full transition-all cursor-default"
-      style={{ fontFamily: 'var(--font-mono)' }}>
-      {labelBadge}
-      <span className="w-1 h-1 rounded-full bg-violet-400" style={{ filter: 'drop-shadow(0 0 3px rgba(167,139,250,0.8))' }} />
-      TABLE · {source.section} <span className="opacity-30">·</span> p.{source.page}
+  const tooltip = tooltipPos && (
+    <div style={{
+      position:  'fixed',
+      left:      tooltipPos.x,
+      top:       tooltipPos.y - 10,
+      transform: 'translate(-50%, -100%)',
+      zIndex:    9999,
+      width:     300,
+      background: 'rgba(4,4,16,0.97)',
+      border:    '1px solid rgba(0,245,255,0.18)',
+      borderRadius: 12,
+      padding:   '12px 14px',
+      boxShadow: '0 20px 60px rgba(0,0,0,0.85)',
+      backdropFilter: 'blur(24px)',
+      pointerEvents: 'none',
+    }}>
+      <p style={{ fontSize: 9, color: 'rgba(0,245,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 7, fontFamily: 'var(--font-mono)' }}>
+        {isTable ? 'TABLE · ' : ''}{source.section} · p.{source.page}
+      </p>
+      <p style={{ fontSize: 11, color: 'rgba(156,163,175,0.88)', lineHeight: 1.65 }}>
+        {source.text.length > 360 ? source.text.slice(0, 360) + '…' : source.text}
+      </p>
     </div>
   )
+
+  if (isTable) return (
+    <>
+      <div ref={chipRef} onMouseEnter={handleMouseEnter} onMouseLeave={() => setTooltipPos(null)}
+        className="group flex items-center gap-2 bg-violet-500/10 hover:bg-violet-500/18 border border-violet-500/25 hover:border-violet-400/40 text-violet-300 hover:text-violet-200 text-[10px] px-3 py-1.5 rounded-full transition-all cursor-default"
+        style={{ fontFamily: 'var(--font-mono)' }}>
+        {labelBadge}
+        <span className="w-1 h-1 rounded-full bg-violet-400" style={{ filter: 'drop-shadow(0 0 3px rgba(167,139,250,0.8))' }} />
+        TABLE · {source.section} <span className="opacity-30">·</span> p.{source.page}
+      </div>
+      {tooltip}
+    </>
+  )
   return (
-    <div className="group flex items-center gap-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] hover:border-cyan-500/25 text-gray-500 hover:text-cyan-300 text-[10px] px-3 py-1.5 rounded-full transition-all cursor-default"
-      style={{ fontFamily: 'var(--font-mono)' }}>
-      {labelBadge}
-      <span className="w-1 h-1 rounded-full bg-cyan-500/60 group-hover:bg-cyan-400 transition-colors" />
-      {source.section} <span className="opacity-30">·</span> p.{source.page}
-    </div>
+    <>
+      <div ref={chipRef} onMouseEnter={handleMouseEnter} onMouseLeave={() => setTooltipPos(null)}
+        className="group flex items-center gap-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] hover:border-cyan-500/25 text-gray-500 hover:text-cyan-300 text-[10px] px-3 py-1.5 rounded-full transition-all cursor-default"
+        style={{ fontFamily: 'var(--font-mono)' }}>
+        {labelBadge}
+        <span className="w-1 h-1 rounded-full bg-cyan-500/60 group-hover:bg-cyan-400 transition-colors" />
+        {source.section} <span className="opacity-30">·</span> p.{source.page}
+      </div>
+      {tooltip}
+    </>
   )
 }
 
@@ -534,9 +583,17 @@ function PipelineStepper({ progress }) {
 }
 
 /* ── MESSAGE ─────────────────────────────────────────────────────── */
-function Message({ msg, isNewest, onFollowUp }) {
+function Message({ msg, isNewest, onFollowUp, scoreHistory }) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [showTrace,  setShowTrace]  = useState(false)
+  const [copied,     setCopied]     = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(msg.content?.answer || '').then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
 
   if (msg.role === 'user') {
     return (
@@ -660,7 +717,7 @@ function Message({ msg, isNewest, onFollowUp }) {
             <MetricRing label="Confidence"  value={confidence}          isPercentage={true} accent="cyan"   />
             <MetricRing label="Faithfulness" value={faithfulness || 0}                      accent="violet" />
             <MetricRing label="Relevancy"   value={answer_relevancy || 0}                   accent="blue"   />
-            <SparkLine confidence={confidence} />
+            <SparkLine scores={scoreHistory} />
           </div>
 
           {/* Sources */}
@@ -691,14 +748,37 @@ function Message({ msg, isNewest, onFollowUp }) {
                 </div>
               )}
             </div>
-            <button onClick={() => setShowTrace(!showTrace)}
-              className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-700 hover:text-cyan-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-cyan-500/08"
-              style={{ fontFamily: 'var(--font-mono)' }}>
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              Trace
-            </button>
+            <div className="flex items-center gap-1">
+              <button onClick={handleCopy}
+                className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors px-3 py-1.5 rounded-lg hover:bg-cyan-500/08"
+                style={{ fontFamily: 'var(--font-mono)', color: copied ? 'rgb(52,211,153)' : '' }}
+                onMouseEnter={e => { if (!copied) e.currentTarget.style.color = 'rgb(34,211,238)' }}
+                onMouseLeave={e => { if (!copied) e.currentTarget.style.color = '' }}>
+                {copied ? (
+                  <>
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    Copy
+                  </>
+                )}
+              </button>
+              <button onClick={() => setShowTrace(!showTrace)}
+                className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-700 hover:text-cyan-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-cyan-500/08"
+                style={{ fontFamily: 'var(--font-mono)' }}>
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Trace
+              </button>
+            </div>
           </div>
         </div>
 
@@ -723,10 +803,172 @@ const STARTER_QUESTIONS = [
   'Are there any limitations or future work discussed?',
 ]
 
+/* ── AUDIENCE SELECTOR ───────────────────────────────────────────── */
+const AUDIENCES = [
+  { id: 'default', label: 'Default' },
+  { id: 'eli5',    label: 'ELI5'    },
+  { id: 'student', label: 'Student' },
+  { id: 'expert',  label: 'Expert'  },
+  { id: 'peer',    label: 'Peer'    },
+]
+const AUDIENCE_PREFIX = {
+  eli5:    'Explain this as if I am a 5-year-old with no technical background: ',
+  student: 'Explain this assuming I am an undergraduate student new to the topic: ',
+  expert:  'Explain this at a full expert research level with complete technical detail: ',
+  peer:    'Explain this as you would to a fellow researcher who is familiar with the field: ',
+}
+function AudienceSelector({ audience, onChange }) {
+  return (
+    <div className="flex items-center gap-1.5 mb-2 px-1">
+      <span className="text-[9px] uppercase tracking-[0.18em] text-gray-700 font-bold mr-1" style={{ fontFamily: 'var(--font-mono)' }}>Audience</span>
+      {AUDIENCES.map(a => (
+        <button key={a.id} onClick={() => onChange(a.id)}
+          className="text-[9px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full transition-all duration-200"
+          style={audience === a.id
+            ? { background: 'rgba(0,245,255,0.15)', border: '1px solid rgba(0,245,255,0.35)', color: '#22d3ee' }
+            : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#4b5563' }}>
+          {a.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/* ── GLOSSARY PANEL ──────────────────────────────────────────────── */
+const CATEGORY_STYLE = {
+  method:  { bg: 'rgba(0,245,255,0.08)',    border: 'rgba(0,245,255,0.2)',    color: '#22d3ee' },
+  metric:  { bg: 'rgba(139,92,246,0.08)',   border: 'rgba(139,92,246,0.25)',  color: '#a78bfa' },
+  dataset: { bg: 'rgba(251,191,36,0.08)',   border: 'rgba(251,191,36,0.22)',  color: '#fbbf24' },
+  concept: { bg: 'rgba(52,211,153,0.08)',   border: 'rgba(52,211,153,0.2)',   color: '#34d399' },
+  model:   { bg: 'rgba(236,72,153,0.08)',   border: 'rgba(236,72,153,0.2)',   color: '#f472b6' },
+}
+function GlossaryPanel({ paperId, onClose }) {
+  const [terms, setTerms]   = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError]   = useState('')
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    getGlossary(paperId)
+      .then(d => setTerms(d.terms))
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [paperId])
+
+  const filtered = terms?.filter(t =>
+    !search || t.term.toLowerCase().includes(search.toLowerCase()) || t.definition.toLowerCase().includes(search.toLowerCase())
+  )
+
+  return (
+    <div className="panel-slide-in fixed top-0 right-0 bottom-0 z-[80] flex flex-col custom-scrollbar"
+      style={{ width: 380, background: 'rgba(4,4,16,0.97)', borderLeft: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(32px)' }}>
+      <div className="flex items-center justify-between px-6 py-5 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.22em] text-cyan-400/60 font-bold mb-0.5" style={{ fontFamily: 'var(--font-mono)' }}>Jargon</p>
+          <h2 className="text-white font-semibold text-sm" style={{ fontFamily: 'var(--font-display)' }}>Glossary</h2>
+        </div>
+        <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:text-white hover:bg-white/08 transition-all">×</button>
+      </div>
+      <div className="px-4 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Filter terms…"
+          className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-white placeholder-gray-700 outline-none focus:border-cyan-500/30 transition-colors"
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 custom-scrollbar">
+        {loading && <div className="flex justify-center py-12"><div className="w-6 h-6 rounded-full border-2 border-transparent" style={{ borderTopColor: '#00f5ff', animation: 'spin 1s linear infinite' }} /></div>}
+        {error && <p className="text-red-400/60 text-xs text-center py-8">{error}</p>}
+        {filtered?.map((t, i) => {
+          const s = CATEGORY_STYLE[t.category] || CATEGORY_STYLE.concept
+          return (
+            <div key={i} className="rounded-xl p-3.5" style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="font-semibold text-white text-sm" style={{ fontFamily: 'var(--font-display)' }}>{t.term}</span>
+                <span className="text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full flex-shrink-0"
+                  style={{ background: s.bg, border: `1px solid ${s.border}`, color: s.color }}>{t.category}</span>
+              </div>
+              <p className="text-gray-400 text-xs leading-relaxed">{t.definition}</p>
+            </div>
+          )
+        })}
+        {!loading && filtered?.length === 0 && <p className="text-gray-700 text-xs text-center py-8">No terms match</p>}
+      </div>
+    </div>
+  )
+}
+
+/* ── RECOMMENDATIONS PANEL ───────────────────────────────────────── */
+function RecsPanel({ paperId, onClose, onImport }) {
+  const [data, setData]       = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+
+  useEffect(() => {
+    getRecommendations(paperId)
+      .then(d => setData(d))
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [paperId])
+
+  return (
+    <div className="panel-slide-in fixed top-0 right-0 bottom-0 z-[80] flex flex-col"
+      style={{ width: 400, background: 'rgba(4,4,16,0.97)', borderLeft: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(32px)' }}>
+      <div className="flex items-center justify-between px-6 py-5 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.22em] text-violet-400/60 font-bold mb-0.5" style={{ fontFamily: 'var(--font-mono)' }}>Discovery</p>
+          <h2 className="text-white font-semibold text-sm" style={{ fontFamily: 'var(--font-display)' }}>What to Read Next</h2>
+        </div>
+        <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:text-white hover:bg-white/08 transition-all">×</button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 custom-scrollbar">
+        {loading && <div className="flex flex-col items-center gap-3 py-12">
+          <div className="w-6 h-6 rounded-full border-2 border-transparent" style={{ borderTopColor: '#a78bfa', animation: 'spin 1s linear infinite' }} />
+          <p className="text-gray-700 text-xs">Analyzing paper topics…</p>
+        </div>}
+        {error && <p className="text-red-400/60 text-xs text-center py-8">{error}</p>}
+        {data?.queries && (
+          <div className="mb-4 px-1">
+            <p className="text-[9px] uppercase tracking-[0.18em] text-gray-700 font-bold mb-2">Based on queries</p>
+            <div className="flex flex-wrap gap-1.5">
+              {data.queries.map((q, i) => (
+                <span key={i} className="text-[9px] px-2 py-1 rounded-full" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.18)', color: '#a78bfa', fontFamily: 'var(--font-mono)' }}>{q}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {data?.results?.map((r, i) => (
+          <div key={i} className="rounded-xl p-4 transition-all" style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <p className="text-white text-xs font-semibold leading-snug mb-1.5 line-clamp-2" style={{ fontFamily: 'var(--font-display)' }}>{r.title}</p>
+            {r.authors?.length > 0 && <p className="text-gray-600 text-[10px] mb-1 truncate">{r.authors.slice(0, 3).join(', ')}{r.authors.length > 3 ? ' et al.' : ''}</p>}
+            <div className="flex items-center gap-2 mb-2">
+              {r.year && <span className="text-[9px] text-gray-600" style={{ fontFamily: 'var(--font-mono)' }}>{r.year}</span>}
+              {r.venue && <span className="text-[9px] text-gray-600 truncate max-w-[140px]">{r.venue}</span>}
+            </div>
+            {r.pdf_url && (
+              <button onClick={() => onImport(r)}
+                className="text-[9px] font-bold uppercase tracking-wider px-3 py-1 rounded-lg transition-all"
+                style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.25)', color: '#a78bfa' }}>
+                + Add to Library
+              </button>
+            )}
+          </div>
+        ))}
+        {!loading && data?.results?.length === 0 && <p className="text-gray-700 text-xs text-center py-8">No related papers found</p>}
+      </div>
+    </div>
+  )
+}
+
 /* ── CHAT PAGE ───────────────────────────────────────────────────── */
 export default function ChatPage({ paper: initialPaper, onBack }) {
   const [paper, setPaper]                 = useState(initialPaper)
-  const [allMessages, setAllMessages]     = useState({ [initialPaper.paper_id]: [] })
+  const [allMessages, setAllMessages]     = useState(() => {
+    try {
+      const saved = localStorage.getItem('papermind_chats')
+      const parsed = saved ? JSON.parse(saved) : {}
+      return { [initialPaper.paper_id]: [], ...parsed }
+    } catch { return { [initialPaper.paper_id]: [] } }
+  })
   const [input, setInput]                 = useState('')
   const [loading, setLoading]             = useState(false)
   const [progress, setProgress]           = useState([])
@@ -736,6 +978,10 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
   const [comparePaper2, setComparePaper2] = useState(null)
   const [toasts, setToasts]               = useState([])
   const [showCmdPalette, setShowCmdPalette] = useState(false)
+  const [deleteConfirm, setDeleteConfirm]   = useState(null)
+  const [audience,      setAudience]        = useState('default')
+  const [showGlossary,  setShowGlossary]    = useState(false)
+  const [showRecs,      setShowRecs]        = useState(false)
   const toastCounter = useRef(0)
   const bottomRef    = useRef()
   const textareaRef  = useRef()
@@ -754,6 +1000,19 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [allMessages, loading])
+
+  // Persist chat history across page refreshes
+  useEffect(() => {
+    try { localStorage.setItem('papermind_chats', JSON.stringify(allMessages)) } catch {}
+  }, [allMessages])
+
+  // Auto-resize textarea as user types
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+  }, [input])
 
   useEffect(() => {
     if (showSwitcher) {
@@ -779,10 +1038,38 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
+  const handleExportFlashcards = useCallback(() => {
+    const msgs = allMessages[paper.paper_id] || []
+    const pairs = []
+    for (let i = 0; i < msgs.length - 1; i++) {
+      if (msgs[i].role === 'user' && msgs[i + 1].role === 'assistant') {
+        const q = msgs[i].content
+        const a = (msgs[i + 1].content?.answer || '').replace(/\*{0,2}(ESSENCE|DETAIL):?\*{0,2}/gi, '').trim().slice(0, 500)
+        if (q && a) pairs.push(`${q}\t${a}`)
+      }
+    }
+    if (!pairs.length) { showToast('No Q&A pairs to export yet', 'warn'); return }
+    const blob = new Blob([pairs.join('\n')], { type: 'text/plain' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url
+    a.download = `${paper.filename.replace('.pdf', '')}_flashcards.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+    showToast(`Exported ${pairs.length} flashcards`, 'info')
+  }, [allMessages, paper, showToast])
+
   const handleCommand = (cmd) => {
     if (cmd === 'upload')    onBack()
     if (cmd === 'compare')   { setCompareMode(p => !p); showToast('Compare mode ' + (!compareMode ? 'enabled' : 'disabled'), 'info') }
-    if (cmd === 'clear')     setAllMessages(prev => ({ ...prev, [paper.paper_id]: [] }))
+    if (cmd === 'glossary')  setShowGlossary(true)
+    if (cmd === 'recommend') setShowRecs(true)
+    if (cmd === 'flashcard') handleExportFlashcards()
+    if (cmd === 'clear')     setAllMessages(prev => {
+      const next = { ...prev, [paper.paper_id]: [] }
+      try { localStorage.setItem('papermind_chats', JSON.stringify(next)) } catch {}
+      return next
+    })
     if (cmd === 'workspace') setShowSwitcher(true)
   }
 
@@ -800,7 +1087,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
 
   const handleDelete = async (e, p) => {
     e.stopPropagation()
-    if (!window.confirm(`Delete "${p.filename}"?`)) return
+    setDeleteConfirm(null)
     try {
       await deletePaper(p.paper_id)
       setPapers(prev => prev.filter(x => x.paper_id !== p.paper_id))
@@ -812,13 +1099,15 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
   }
 
   const handleSend = async (questionOverride) => {
-    const question = (questionOverride ?? input).trim()
-    if (!question || loading) return
+    const raw = (questionOverride ?? input).trim()
+    if (!raw || loading) return
+    const prefix   = AUDIENCE_PREFIX[audience] || ''
+    const question = prefix ? prefix + raw : raw
     setInput('')
     const paperId = paper.paper_id
     setAllMessages(prev => ({
       ...prev,
-      [paperId]: [...(prev[paperId] || []), { role: 'user', content: question }],
+      [paperId]: [...(prev[paperId] || []), { role: 'user', content: raw }],
     }))
     setLoading(true)
     setProgress([])
@@ -876,6 +1165,8 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       <CosmicOrbs />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       {showCmdPalette && <CommandPalette onClose={() => setShowCmdPalette(false)} onCommand={handleCommand} />}
+      {showGlossary  && <GlossaryPanel  paperId={paper.paper_id} onClose={() => setShowGlossary(false)} />}
+      {showRecs      && <RecsPanel      paperId={paper.paper_id} onClose={() => setShowRecs(false)} onImport={r => { setShowRecs(false); showToast(`Importing "${r.title.slice(0,40)}…"`, 'info') }} />}
 
       {/* ── HEADER ── */}
       <header className="sticky top-0 z-50 backdrop-blur-2xl border-b px-8 py-4"
@@ -997,10 +1288,23 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                               ⇔
                             </button>
                           )}
-                          <button onClick={e => handleDelete(e, p)}
-                            className="w-5 h-5 rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/20 hover:text-red-400 text-gray-600">
-                            ×
-                          </button>
+                          {deleteConfirm === p.paper_id ? (
+                            <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                              <button onClick={e => handleDelete(e, p)}
+                                className="text-[9px] px-2 py-0.5 rounded-md bg-red-500/20 text-red-400 hover:bg-red-500/35 font-bold transition-colors">
+                                Delete
+                              </button>
+                              <button onClick={e => { e.stopPropagation(); setDeleteConfirm(null) }}
+                                className="text-[9px] px-2 py-0.5 rounded-md bg-white/5 text-gray-500 hover:bg-white/10 font-bold transition-colors">
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button onClick={e => { e.stopPropagation(); setDeleteConfirm(p.paper_id) }}
+                              className="w-5 h-5 rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/20 hover:text-red-400 text-gray-600">
+                              ×
+                            </button>
+                          )}
                         </div>
                       </div>
                       {p.status !== 'ready' && (
@@ -1114,14 +1418,21 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
             </div>
           )}
 
-          {messages.map((msg, i) => (
-            <Message
-              key={i}
-              msg={msg}
-              isNewest={i === messages.length - 1 && msg.role === 'assistant' && !loading}
-              onFollowUp={handleFollowUp}
-            />
-          ))}
+          {messages.map((msg, i) => {
+            const scoreHistory = messages
+              .slice(0, i + 1)
+              .filter(m => m.role === 'assistant' && m.content?.confidence != null)
+              .map(m => m.content.confidence)
+            return (
+              <Message
+                key={i}
+                msg={msg}
+                isNewest={i === messages.length - 1 && msg.role === 'assistant' && !loading}
+                onFollowUp={handleFollowUp}
+                scoreHistory={scoreHistory}
+              />
+            )
+          })}
 
           {loading && <PipelineStepper progress={progress} />}
 
@@ -1132,6 +1443,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       {/* ── INPUT DOCK ── */}
       <div className="fixed bottom-10 left-0 right-0 z-50 px-8">
         <div className="max-w-3xl mx-auto">
+          <AudienceSelector audience={audience} onChange={setAudience} />
           <div className="pm-input-dock p-2 transition-all duration-500">
             <div className="flex items-center gap-2">
               <textarea
@@ -1141,6 +1453,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                 onKeyDown={handleKey}
                 placeholder="Message PaperMind Intelligence…"
                 rows={1}
+                style={{ minHeight: '52px', maxHeight: '200px', overflowY: 'auto' }}
                 className="flex-1 bg-transparent border-none px-5 py-4 text-white text-sm placeholder-gray-700 resize-none focus:ring-0 outline-none"
               />
               <button onClick={() => handleSend()}

@@ -110,6 +110,18 @@ export function comparePapersStream(paperIdA, paperIdB, question, onEvent) {
 /* ─────────────────────────────────────────────────────────────────
    Discovery — live paper search + import
 ───────────────────────────────────────────────────────────────── */
+export async function getGlossary(paperId) {
+  const res = await fetch(`${BASE}/papers/${paperId}/glossary`)
+  if (!res.ok) throw new Error(`Glossary failed: HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function getRecommendations(paperId) {
+  const res = await fetch(`${BASE}/papers/${paperId}/recommendations`)
+  if (!res.ok) throw new Error(`Recommendations failed: HTTP ${res.status}`)
+  return res.json()
+}
+
 export async function searchPapers(query, limit = 20) {
   const res = await fetch(`${BASE}/discovery/search`, {
     method: 'POST',

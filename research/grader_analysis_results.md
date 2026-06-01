@@ -81,15 +81,41 @@ scoring them.
 
 ---
 
-## Run 3 — Weak generator (PENDING)
+## Run 3 — Weak generator (PARTIAL — scaffolding leak)
 
-**Date:** TBD — blocked on Groq daily quota reset
+**Date:** 2026-06-02
+**File:** `eval/results/grader_analysis_dev_llama-3.1-8b-instant_20260602_*.jsonl`
 **Command:** `venv/Scripts/python.exe -m eval.analyze_grader --papers 5 --qs 6 --gen-model llama-3.1-8b-instant`
-**Status:** PENDING
+**Generation:** Groq-2 pinned to `llama-3.1-8b-instant`
+**Judge:** N=3 majority vote
+**Status:** PARTIAL — 7/~14 questions answered; scaffolding leak in weak model
 
-`llama-3.1-8b-instant` has a separate Groq TPD quota from `llama-3.3-70b-versatile`,
-so this run may be unblocked even before the strong-model quota resets.
-Verify by checking current quota before running.
+| Metric | Value |
+|--------|-------|
+| Questions (answerable, scored) | 7 |
+| Questions with ≥1 removal | 2 |
+| Mean judge score — original | 0.571 |
+| Mean judge score — cleaned | **0.381** |
+| HELPED | 0 |
+| HURT | 2 |
+| NEUTRAL | 5 |
+
+**Finding:** The grader strongly hurt the weak model. But the data is partially invalid.
+
+**Issues:**
+1. **Scaffolding leak** — `llama-3.1-8b-instant` emits the system prompt template
+   text verbatim ("2-3 sentences capturing the most important insight", "Sharp, direct,
+   standalone", "Follow the answer_structure steps…") into the answer body.
+   `_strip_scaffolding()` in `generator.py` was designed for the strong model's output
+   format and doesn't catch the weak model's different leakage pattern.
+   The grader correctly removes these non-answer sentences as UNSUPPORTED, but the
+   answer is already broken at the generator level — it's the generator's bug, not the
+   grader's.
+2. **Only 7/~14 questions scored** — remaining questions hit Groq TPD on the pinned
+   provider and returned graceful degradation (now correctly skipped by the new SKIP
+   handler).
+
+**Action required:** Fix `_strip_scaffolding()` to handle the weak model's output, then re-run.
 
 ---
 
