@@ -191,17 +191,26 @@ function SparkLine({ scores }) {
 }
 
 /* ── SOURCE CHIP ─────────────────────────────────────────────────── */
-function SourceChip({ source }) {
+function SourceChip({ source, paperId }) {
   const isTable    = source.section_type === 'table'
   const paperLabel = source.paper_label
   const hasText    = source.text?.trim().length > 0
   const chipRef    = useRef()
   const [tooltipPos, setTooltipPos] = useState(null)
 
+  const resolvedPaperId = source.paper_id || paperId
+  const pdfUrl = resolvedPaperId
+    ? `/api/papers/${resolvedPaperId}/pdf#page=${source.page}`
+    : null
+
   const handleMouseEnter = () => {
     if (!hasText) return
     const rect = chipRef.current?.getBoundingClientRect()
     if (rect) setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top })
+  }
+
+  const handleClick = () => {
+    if (pdfUrl) window.open(pdfUrl, '_blank', 'noopener,noreferrer')
   }
 
   const labelBadge = paperLabel ? (
@@ -240,8 +249,9 @@ function SourceChip({ source }) {
   if (isTable) return (
     <>
       <div ref={chipRef} onMouseEnter={handleMouseEnter} onMouseLeave={() => setTooltipPos(null)}
-        className="group flex items-center gap-2 bg-violet-500/10 hover:bg-violet-500/18 border border-violet-500/25 hover:border-violet-400/40 text-violet-300 hover:text-violet-200 text-[10px] px-3 py-1.5 rounded-full transition-all cursor-default"
-        style={{ fontFamily: 'var(--font-mono)' }}>
+        onClick={handleClick}
+        className="group flex items-center gap-2 bg-violet-500/10 hover:bg-violet-500/18 border border-violet-500/25 hover:border-violet-400/40 text-violet-300 hover:text-violet-200 text-[10px] px-3 py-1.5 rounded-full transition-all"
+        style={{ fontFamily: 'var(--font-mono)', cursor: pdfUrl ? 'pointer' : 'default' }}>
         {labelBadge}
         <span className="w-1 h-1 rounded-full bg-violet-400" style={{ filter: 'drop-shadow(0 0 3px rgba(167,139,250,0.8))' }} />
         TABLE · {source.section} <span className="opacity-30">·</span> p.{source.page}
@@ -252,8 +262,9 @@ function SourceChip({ source }) {
   return (
     <>
       <div ref={chipRef} onMouseEnter={handleMouseEnter} onMouseLeave={() => setTooltipPos(null)}
-        className="group flex items-center gap-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] hover:border-cyan-500/25 text-gray-500 hover:text-cyan-300 text-[10px] px-3 py-1.5 rounded-full transition-all cursor-default"
-        style={{ fontFamily: 'var(--font-mono)' }}>
+        onClick={handleClick}
+        className="group flex items-center gap-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] hover:border-cyan-500/25 text-gray-500 hover:text-cyan-300 text-[10px] px-3 py-1.5 rounded-full transition-all"
+        style={{ fontFamily: 'var(--font-mono)', cursor: pdfUrl ? 'pointer' : 'default' }}>
         {labelBadge}
         <span className="w-1 h-1 rounded-full bg-cyan-500/60 group-hover:bg-cyan-400 transition-colors" />
         {source.section} <span className="opacity-30">·</span> p.{source.page}
@@ -583,7 +594,7 @@ function PipelineStepper({ progress }) {
 }
 
 /* ── MESSAGE ─────────────────────────────────────────────────────── */
-function Message({ msg, isNewest, onFollowUp, scoreHistory }) {
+function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory }) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [showTrace,  setShowTrace]  = useState(false)
   const [copied,     setCopied]     = useState(false)
@@ -725,7 +736,7 @@ function Message({ msg, isNewest, onFollowUp, scoreHistory }) {
             <div className="mt-6 pt-5 border-t border-white/[0.04]">
               <p className="text-[10px] uppercase tracking-[0.2em] text-gray-600 mb-3 font-semibold">Evidence Sources</p>
               <div className="flex flex-wrap gap-2">
-                {sources.map((s, i) => <SourceChip key={i} source={s} />)}
+                {sources.map((s, i) => <SourceChip key={i} source={s} paperId={paperId} />)}
               </div>
             </div>
           )}
@@ -1427,6 +1438,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
               <Message
                 key={i}
                 msg={msg}
+                paperId={paper.paper_id}
                 isNewest={i === messages.length - 1 && msg.role === 'assistant' && !loading}
                 onFollowUp={handleFollowUp}
                 scoreHistory={scoreHistory}

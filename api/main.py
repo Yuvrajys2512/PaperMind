@@ -13,7 +13,7 @@ sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from ingestion.pipeline import answer_query, compare_papers
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from api.storage import (
     create_paper_record,
     update_paper_status,
@@ -126,6 +126,22 @@ def delete_paper(paper_id: str):
         print(f"[delete] BM25 cache invalidation failed for {paper_id}: {exc}")
 
     return {"deleted": paper_id}
+
+
+@app.get("/papers/{paper_id}/pdf")
+def serve_paper_pdf(paper_id: str):
+    paper = get_paper(paper_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    pdf_path = get_paper_pdf_path(paper_id)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found.")
+    filename = paper.get("filename", f"{paper_id}.pdf")
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @app.get("/papers/{paper_id}/glossary")
