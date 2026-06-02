@@ -190,13 +190,137 @@ function SparkLine({ scores }) {
   )
 }
 
+/* ── PDF PREVIEW PANEL ───────────────────────────────────────────── */
+function PDFPreviewPanel({ pdfUrl, title, page, onClose }) {
+  const panelRef = useRef()
+
+  // Close on Escape
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // Close on backdrop click (not panel click)
+  const handleBackdrop = e => {
+    if (e.target === e.currentTarget) onClose()
+  }
+
+  return (
+    <div
+      onClick={handleBackdrop}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        backdropFilter: 'blur(6px)',
+        zIndex: 10000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <div
+        ref={panelRef}
+        style={{
+          width: 'min(720px, 92vw)',
+          height: '85vh',
+          background: 'rgba(6,6,22,0.97)',
+          border: '1px solid rgba(0,245,255,0.18)',
+          borderRadius: 16,
+          boxShadow: '0 32px 80px rgba(0,0,0,0.9), 0 0 0 1px rgba(0,245,255,0.06)',
+          display: 'flex', flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '10px 16px',
+          borderBottom: '1px solid rgba(255,255,255,0.05)',
+          flexShrink: 0,
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: 'rgba(0,245,255,0.8)',
+            boxShadow: '0 0 8px rgba(0,245,255,0.7)',
+            flexShrink: 0,
+          }} />
+          <span style={{
+            flex: 1, fontSize: 11, fontFamily: 'var(--font-mono)',
+            color: 'rgba(0,245,255,0.7)',
+            textTransform: 'uppercase', letterSpacing: '0.15em',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {title}
+          </span>
+          <span style={{
+            fontSize: 10, fontFamily: 'var(--font-mono)',
+            color: 'rgba(156,163,175,0.4)',
+            marginRight: 8,
+          }}>
+            p.{page}
+          </span>
+          {/* Open in tab button */}
+          <a
+            href={pdfUrl} target="_blank" rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            title="Open in new tab"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 26, height: 26, borderRadius: 6, flexShrink: 0,
+              color: 'rgba(156,163,175,0.5)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              background: 'transparent',
+              transition: 'color 0.15s, border-color 0.15s',
+              textDecoration: 'none',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = 'rgba(0,245,255,0.8)'; e.currentTarget.style.borderColor = 'rgba(0,245,255,0.25)' }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'rgba(156,163,175,0.5)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)' }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </a>
+          {/* Close button */}
+          <button
+            onClick={onClose}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 26, height: 26, borderRadius: 6, flexShrink: 0,
+              color: 'rgba(156,163,175,0.5)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              background: 'transparent',
+              cursor: 'pointer',
+              transition: 'color 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = 'rgba(239,68,68,0.8)'; e.currentTarget.style.borderColor = 'rgba(239,68,68,0.25)' }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'rgba(156,163,175,0.5)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)' }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        {/* PDF iframe */}
+        <iframe
+          src={pdfUrl}
+          title={title}
+          style={{ flex: 1, border: 'none', width: '100%', background: '#fff' }}
+        />
+      </div>
+    </div>
+  )
+}
+
 /* ── SOURCE CHIP ─────────────────────────────────────────────────── */
 function SourceChip({ source, paperId }) {
   const isTable    = source.section_type === 'table'
   const paperLabel = source.paper_label
   const hasText    = source.text?.trim().length > 0
   const chipRef    = useRef()
-  const [tooltipPos, setTooltipPos] = useState(null)
+  const [tooltipPos,  setTooltipPos]  = useState(null)
+  const [showPreview, setShowPreview] = useState(false)
 
   const resolvedPaperId = source.paper_id || paperId
   const pdfUrl = resolvedPaperId
@@ -210,7 +334,9 @@ function SourceChip({ source, paperId }) {
   }
 
   const handleClick = () => {
-    if (pdfUrl) window.open(pdfUrl, '_blank', 'noopener,noreferrer')
+    if (!pdfUrl) return
+    setTooltipPos(null)
+    setShowPreview(true)
   }
 
   const labelBadge = paperLabel ? (
@@ -241,9 +367,18 @@ function SourceChip({ source, paperId }) {
         {isTable ? 'TABLE · ' : ''}{source.section} · p.{source.page}
       </p>
       <p style={{ fontSize: 11, color: 'rgba(156,163,175,0.88)', lineHeight: 1.65 }}>
-        {source.text.length > 360 ? source.text.slice(0, 360) + '…' : source.text}
+        {source.text?.length > 360 ? source.text.slice(0, 360) + '…' : source.text}
       </p>
     </div>
+  )
+
+  const preview = showPreview && pdfUrl && (
+    <PDFPreviewPanel
+      pdfUrl={pdfUrl}
+      title={`${isTable ? 'TABLE · ' : ''}${source.section}`}
+      page={source.page}
+      onClose={() => setShowPreview(false)}
+    />
   )
 
   if (isTable) return (
@@ -257,6 +392,7 @@ function SourceChip({ source, paperId }) {
         TABLE · {source.section} <span className="opacity-30">·</span> p.{source.page}
       </div>
       {tooltip}
+      {preview}
     </>
   )
   return (
@@ -270,6 +406,7 @@ function SourceChip({ source, paperId }) {
         {source.section} <span className="opacity-30">·</span> p.{source.page}
       </div>
       {tooltip}
+      {preview}
     </>
   )
 }
