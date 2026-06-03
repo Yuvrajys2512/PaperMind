@@ -124,30 +124,13 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
       />
 
       {/* ── HERO ── */}
-      <div className="relative z-10 mb-12 text-center">
-        {/* Badge pill */}
-        <div
-          className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full mb-7"
-          style={{
-            background: 'rgba(0,245,255,0.06)',
-            border: '1px solid rgba(0,245,255,0.14)',
-          }}
-        >
-          <span
-            className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"
-            style={{ boxShadow: '0 0 6px rgba(0,245,255,0.7)' }}
-          />
-          <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-400/70">
-            Powered by PaperMind AI
-          </span>
-        </div>
-
+      <div className="relative z-10 mb-10 text-center">
         {/* Heading */}
         <h1
-          className="text-5xl md:text-6xl font-bold mb-5 tracking-tight leading-tight"
+          className="text-5xl md:text-6xl font-bold mb-4 tracking-tight leading-tight"
           style={{ fontFamily: 'var(--font-display)' }}
         >
-          The Future of Research
+          Ask questions.
           <br />
           <span
             className="text-transparent bg-clip-text"
@@ -156,41 +139,42 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
               WebkitBackgroundClip: 'text',
             }}
           >
-            Starts with PaperMind
+            Get answers from the paper.
           </span>
         </h1>
 
         {/* Subtitle */}
-        <p className="text-gray-500 text-base max-w-lg mx-auto font-light leading-relaxed">
-          Upload your research papers and interact with them like never before.
-          Context-aware, grounded, and incredibly fast.
+        <p className="text-gray-500 text-base max-w-md mx-auto font-light leading-relaxed">
+          Drop any research PDF. Ask anything. Every answer cites the exact section it came from.
         </p>
       </div>
 
-      {/* ── STATS ROW ── */}
-      <div className="relative z-10 flex gap-4 mb-10 flex-wrap justify-center">
-        {stats.map((s, i) => (
-          <div
-            key={i}
-            className="flex flex-col items-center px-5 py-4 rounded-2xl"
-            style={{
-              background: 'linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))',
-              border: '1px solid rgba(255,255,255,0.06)',
-              backdropFilter: 'blur(16px)',
-              minWidth: 120,
-            }}
-          >
-            <span
-              className="text-2xl font-bold text-white mb-0.5"
-              style={{ fontFamily: 'var(--font-mono)' }}
+      {/* ── STATS ROW — only shown when session history exists ── */}
+      {stats[0].value !== '—' && (
+        <div className="relative z-10 flex gap-4 mb-10 flex-wrap justify-center">
+          {stats.map((s, i) => (
+            <div
+              key={i}
+              className="flex flex-col items-center px-5 py-4 rounded-2xl"
+              style={{
+                background: 'linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))',
+                border: '1px solid rgba(255,255,255,0.06)',
+                backdropFilter: 'blur(16px)',
+                minWidth: 120,
+              }}
             >
-              {s.value}
-            </span>
-            <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-gray-500 mb-0.5">{s.label}</span>
-            <span className="text-[9px] text-gray-700">{s.sub}</span>
-          </div>
-        ))}
-      </div>
+              <span
+                className="text-2xl font-bold text-white mb-0.5"
+                style={{ fontFamily: 'var(--font-mono)' }}
+              >
+                {s.value}
+              </span>
+              <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-gray-500 mb-0.5">{s.label}</span>
+              <span className="text-[9px] text-gray-700">{s.sub}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── MAIN ACTION AREA ── */}
       <div className="relative z-10 w-full max-w-2xl">
@@ -266,10 +250,10 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
                 className="text-2xl font-semibold text-white mb-2"
                 style={{ fontFamily: 'var(--font-display)' }}
               >
-                {dragging ? 'Drop to Ingest' : 'Ingest Research Paper'}
+                {dragging ? 'Release to open' : 'Drop a paper PDF'}
               </h2>
               <p className="text-gray-600 text-center font-light mb-8 max-w-xs text-sm">
-                Drag and drop your PDF here, or click to browse your workspace files.
+                Or click to browse. Any academic PDF works — preprints, published papers, reports.
               </p>
 
               <button
@@ -324,12 +308,12 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
               className="text-xl font-semibold text-white mb-2"
               style={{ fontFamily: 'var(--font-display)' }}
             >
-              {phase === 'uploading' ? 'Uploading Knowledge' : 'Synthesizing Content'}
+              {phase === 'uploading' ? 'Uploading…' : 'Processing paper'}
             </h3>
             <p className="text-gray-600 text-center font-light mb-8 text-sm">
               {phase === 'uploading'
-                ? `Moving ${filename} to our secure AI workspace…`
-                : `Applying neural parsing to ${filename}. This usually takes 30s.`}
+                ? `Sending ${filename}…`
+                : `Parsing, chunking, and indexing ${filename}. Usually done in 30s.`}
             </p>
 
             {/* Stage indicators */}
@@ -458,10 +442,10 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
       {/* ── FOOTER ── */}
       <div className="fixed bottom-0 left-0 right-0 text-center py-4 pointer-events-none z-10">
         <p
-          className="text-gray-700 text-[10px] uppercase tracking-[0.2em]"
+          className="text-gray-800 text-[10px] uppercase tracking-[0.2em]"
           style={{ fontFamily: 'var(--font-mono)' }}
         >
-          PaperMind · Context-Grounded Research Intelligence
+          PaperMind
         </p>
       </div>
 
