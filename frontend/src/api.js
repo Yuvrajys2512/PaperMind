@@ -122,6 +122,19 @@ export async function getRecommendations(paperId) {
   return res.json()
 }
 
+export async function rewriteText(text, mode) {
+  const res = await fetch(`${BASE}/rewrite`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, mode }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Rewrite failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function searchPapers(query, limit = 20) {
   const res = await fetch(`${BASE}/discovery/search`, {
     method: 'POST',

@@ -11,6 +11,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from ingestion.pipeline import answer_query, compare_papers
+from ingestion.rewriter import rewrite_text
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
@@ -234,6 +235,32 @@ async def get_recommendations(paper_id: str):
             continue
 
     return {"results": results[:12], "queries": queries}
+
+
+class RewriteRequest(BaseModel):
+    text: str
+    mode: str  # "academic" | "plain" | "concise"
+
+
+@app.post("/rewrite")
+async def rewrite(request: RewriteRequest):
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty.")
+    if request.mode not in ("academic", "plain", "concise"):
+        raise HTTPException(status_code=400, detail="mode must be academic, plain, or concise.")
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, rewrite_text, request.text, request.mode),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Rewrite timed out.")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Rewrite failed: {exc}")
+
+    return {"result": result, "mode": request.mode}
 
 
 class QueryRequest(BaseModel):

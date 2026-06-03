@@ -3,6 +3,7 @@ import UploadPage from './pages/UploadPage'
 import ChatPage from './pages/ChatPage'
 import DiscoverPage from './pages/DiscoverPage'
 import LibraryPage from './pages/LibraryPage'
+import RewritePage from './pages/RewritePage'
 
 export default function App() {
   const [page, setPage]               = useState('upload')
@@ -14,7 +15,7 @@ export default function App() {
   }
 
   if (page === 'chat') {
-    return <ChatPage paper={currentPaper} onBack={() => setPage('upload')} />
+    return <ChatPage paper={currentPaper} onBack={() => setPage('upload')} onRewrite={() => setPage('rewrite')} />
   }
   if (page === 'discover') {
     return (
@@ -34,11 +35,15 @@ export default function App() {
       />
     )
   }
+  if (page === 'rewrite') {
+    return <RewritePage onBack={() => setPage('upload')} />
+  }
   return (
     <UploadPage
       onPaperReady={handlePaperReady}
       onDiscover={() => setPage('discover')}
       onLibrary={() => setPage('library')}
+      onRewrite={() => setPage('rewrite')}
     />
   )
 }

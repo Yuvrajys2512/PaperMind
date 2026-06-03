@@ -73,7 +73,9 @@
       "Bash(git --no-pager log --oneline -2)",
       "Bash(venv/Scripts/python.exe -m eval.run_ablations --papers 5 --qs 6)",
       "Bash(grep -E \"\\\\.py$\")",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(venv/Scripts/python.exe -c \"from ingestion.rewriter import rewrite_text; print\\('rewriter OK'\\)\")",
+      "Bash(venv/Scripts/python.exe -c \"from api.main import app; print\\('main OK'\\)\")"
     ]
   }
 }

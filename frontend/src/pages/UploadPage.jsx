@@ -18,7 +18,7 @@ function CosmicOrbs() {
 /* ─────────────────────────────────────────────────────────────────
    UPLOAD PAGE
 ───────────────────────────────────────────────────────────────── */
-export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
+export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewrite }) {
   const [dragging, setDragging]             = useState(false)
   const [phase, setPhase]                   = useState('idle') // idle | uploading | processing | error
   const [filename, setFilename]             = useState('')
@@ -432,6 +432,23 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary }) {
                     {paperCount}
                   </span>
                 )}
+              </button>
+            )}
+            {onRewrite && (
+              <button
+                onClick={onRewrite}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs transition-all duration-200 hover:text-emerald-300"
+                style={{
+                  background: 'rgba(52,211,153,0.04)',
+                  border: '1px solid rgba(52,211,153,0.12)',
+                  color: '#6ee7b7',
+                }}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                Rewrite
               </button>
             )}
           </div>
