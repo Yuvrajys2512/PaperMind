@@ -250,21 +250,59 @@ export default function LibraryPage({ onOpen, onBack, onDiscover }) {
         )}
 
         {!loading && !error && papers.length === 0 && (
-          <div className="flex flex-col items-center py-16 gap-4">
-            <svg className="w-10 h-10 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5"
-                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-            </svg>
-            <p className="text-gray-600 text-sm">No papers yet</p>
+          <div className="flex flex-col items-center py-16 text-center">
+            {/* Decorative icon cluster */}
+            <div className="relative w-20 h-20 mb-8">
+              <div className="absolute inset-0 rounded-2xl flex items-center justify-center"
+                style={{ background: 'linear-gradient(145deg, rgba(0,245,255,0.07), rgba(139,92,246,0.04))', border: '1px solid rgba(0,245,255,0.1)' }}>
+                <svg className="w-8 h-8 text-cyan-500/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5"
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <div className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-lg flex items-center justify-center"
+                style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.25)' }}>
+                <span className="text-[10px] text-violet-400">+</span>
+              </div>
+            </div>
+
+            <h3 className="text-white font-semibold text-base mb-2" style={{ fontFamily: 'var(--font-display)' }}>
+              Your library is empty
+            </h3>
+            <p className="text-gray-600 text-sm max-w-xs leading-relaxed mb-8">
+              Upload any research PDF and ask questions — every answer cites the exact section it came from.
+            </p>
+
+            {/* Feature pills */}
+            <div className="flex flex-wrap gap-2 justify-center mb-8 max-w-sm">
+              {[
+                'Cited answers',
+                'Evidence grading',
+                'Glossary extraction',
+                'Multi-paper compare',
+                'Export to Markdown',
+                'Anki flashcards',
+              ].map(f => (
+                <span key={f} className="text-[10px] px-3 py-1 rounded-full font-medium"
+                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#4b5563' }}>
+                  {f}
+                </span>
+              ))}
+            </div>
+
             <div className="flex gap-3">
               <button onClick={onBack}
-                className="px-4 py-2 rounded-xl text-xs font-semibold"
-                style={{ background: 'rgba(0,245,255,0.08)', border: '1px solid rgba(0,245,255,0.18)', color: '#22d3ee' }}>
+                className="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all"
+                style={{ background: 'rgba(0,245,255,0.08)', border: '1px solid rgba(0,245,255,0.18)', color: '#22d3ee' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,245,255,0.14)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(0,245,255,0.08)'}>
                 Upload a PDF
               </button>
               <button onClick={onDiscover}
-                className="px-4 py-2 rounded-xl text-xs font-semibold"
-                style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#c4b5fd' }}>
+                className="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all"
+                style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#c4b5fd' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(167,139,250,0.14)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(167,139,250,0.08)'}>
                 Discover Papers
               </button>
             </div>

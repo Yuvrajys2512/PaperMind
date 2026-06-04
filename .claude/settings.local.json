@@ -75,7 +75,8 @@
       "Bash(grep -E \"\\\\.py$\")",
       "Bash(git *)",
       "Bash(venv/Scripts/python.exe -c \"from ingestion.rewriter import rewrite_text; print\\('rewriter OK'\\)\")",
-      "Bash(venv/Scripts/python.exe -c \"from api.main import app; print\\('main OK'\\)\")"
+      "Bash(venv/Scripts/python.exe -c \"from api.main import app; print\\('main OK'\\)\")",
+      "Bash(dir \"C:\\\\Users\\\\Yuvraj Srivastava\\\\Desktop\\\\Projects\\\\PaperMind\")"
     ]
   }
 }

@@ -2,6 +2,11 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { listPapers, deletePaper, queryPaperStream, comparePapersStream, getGlossary, getRecommendations } from '../api'
 import ReactMarkdown from 'react-markdown'
 
+/* ── HELPERS ─────────────────────────────────────────────────────── */
+function escapeHtml(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
 /* ── COSMIC ORBS ─────────────────────────────────────────────────── */
 function CosmicOrbs() {
   return (
@@ -54,13 +59,16 @@ function ToastContainer({ toasts, onDismiss }) {
 
 /* ── COMMAND PALETTE ─────────────────────────────────────────────── */
 const CMD_LIST = [
-  { id: 'upload',    label: 'Upload new paper',        icon: '↑' },
-  { id: 'compare',   label: 'Toggle compare mode',     icon: '⇔' },
-  { id: 'glossary',  label: 'Open jargon glossary',    icon: '§' },
-  { id: 'recommend', label: 'What to read next',       icon: '→' },
-  { id: 'flashcard', label: 'Export flashcards (Anki)', icon: '⊟' },
-  { id: 'clear',     label: 'Clear conversation',      icon: '⌫' },
-  { id: 'workspace', label: 'Open workspace switcher', icon: '◫' },
+  { id: 'upload',     label: 'Upload new paper',           icon: '↑' },
+  { id: 'compare',    label: 'Toggle compare mode',        icon: '⇔' },
+  { id: 'notes',      label: 'Open paper notes',           icon: '✎' },
+  { id: 'glossary',   label: 'Open jargon glossary',       icon: '§' },
+  { id: 'recommend',  label: 'What to read next',          icon: '→' },
+  { id: 'flashcard',  label: 'Export flashcards (Anki)',   icon: '⊟' },
+  { id: 'export-md',  label: 'Export session as Markdown', icon: '⊞' },
+  { id: 'export-pdf', label: 'Export session as PDF',      icon: '⊟' },
+  { id: 'clear',      label: 'Clear conversation',         icon: '⌫' },
+  { id: 'workspace',  label: 'Open workspace switcher',    icon: '◫' },
 ]
 
 function CommandPalette({ onClose, onCommand }) {
@@ -1107,6 +1115,122 @@ function RecsPanel({ paperId, onClose, onImport }) {
   )
 }
 
+/* ── NOTES PANEL ─────────────────────────────────────────────────── */
+function NotesPanel({ paperId, paperName, onClose }) {
+  const storageKey = `papermind_notes_${paperId}`
+  const [notes, setNotes] = useState(() => {
+    try { return localStorage.getItem(storageKey) || '' } catch { return '' }
+  })
+  const [saved, setSaved] = useState(true)
+  const saveTimer = useRef(null)
+
+  const handleChange = (e) => {
+    const val = e.target.value
+    setNotes(val)
+    setSaved(false)
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      try { localStorage.setItem(storageKey, val); setSaved(true) } catch {}
+    }, 600)
+  }
+
+  useEffect(() => () => clearTimeout(saveTimer.current), [])
+
+  const wordCount = notes.trim() ? notes.trim().split(/\s+/).length : 0
+
+  return (
+    <div className="panel-slide-in fixed top-0 right-0 bottom-0 z-[80] flex flex-col"
+      style={{ width: 360, background: 'rgba(4,4,16,0.97)', borderLeft: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(32px)' }}>
+      <div className="flex items-center justify-between px-6 py-5 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.22em] text-emerald-400/60 font-bold mb-0.5" style={{ fontFamily: 'var(--font-mono)' }}>Research</p>
+          <h2 className="text-white font-semibold text-sm" style={{ fontFamily: 'var(--font-display)' }}>Notes</h2>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-[9px] uppercase tracking-wider font-bold transition-colors" style={{ fontFamily: 'var(--font-mono)', color: saved ? 'rgba(52,211,153,0.5)' : 'rgba(251,191,36,0.6)' }}>
+            {saved ? '● Saved' : '○ Saving…'}
+          </span>
+          <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:text-white hover:bg-white/[0.08] transition-all">×</button>
+        </div>
+      </div>
+      <div className="px-6 py-2.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+        <p className="text-[10px] text-gray-700 truncate" style={{ fontFamily: 'var(--font-mono)' }}>{paperName}</p>
+      </div>
+      <textarea
+        value={notes}
+        onChange={handleChange}
+        placeholder="Jot down key insights, open questions, things to follow up on…"
+        className="flex-1 bg-transparent px-6 py-5 text-sm text-gray-300 placeholder-gray-700 resize-none outline-none leading-relaxed custom-scrollbar"
+        style={{ fontFamily: 'var(--font-display)' }}
+      />
+      <div className="px-6 py-3 border-t flex items-center justify-between" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+        <p className="text-[9px] text-gray-700" style={{ fontFamily: 'var(--font-mono)' }}>
+          {wordCount > 0 ? `${wordCount} word${wordCount === 1 ? '' : 's'} · auto-saved` : 'Auto-saved to this browser'}
+        </p>
+        {notes.trim() && (
+          <button
+            onClick={() => { setNotes(''); try { localStorage.removeItem(storageKey) } catch {} setSaved(true) }}
+            className="text-[9px] text-gray-700 hover:text-red-400/70 transition-colors uppercase tracking-wider font-bold"
+            style={{ fontFamily: 'var(--font-mono)' }}>
+            Clear
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ── EXPORT MENU ─────────────────────────────────────────────────── */
+function ExportMenu({ onExportMd, onExportPdf }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef()
+
+  useEffect(() => {
+    const handler = e => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
+        style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: 'rgba(107,114,128,1)' }}>
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        <span className="text-[9px] uppercase tracking-wider" style={{ fontFamily: 'var(--font-mono)' }}>Export</span>
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-full mt-2 rounded-xl overflow-hidden animate-slide-down"
+          style={{ background: 'rgba(6,6,18,0.98)', border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 16px 48px rgba(0,0,0,0.8)', minWidth: 170, zIndex: 100 }}>
+          <button
+            onClick={() => { onExportMd(); setOpen(false) }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors text-left">
+            <span className="text-cyan-400/60 text-base">⊞</span>
+            <div>
+              <p className="text-gray-300 text-xs font-medium">Markdown</p>
+              <p className="text-gray-600 text-[10px]">.md file download</p>
+            </div>
+          </button>
+          <div style={{ height: 1, background: 'rgba(255,255,255,0.04)' }} />
+          <button
+            onClick={() => { onExportPdf(); setOpen(false) }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors text-left">
+            <span className="text-violet-400/60 text-base">⊟</span>
+            <div>
+              <p className="text-gray-300 text-xs font-medium">PDF</p>
+              <p className="text-gray-600 text-[10px]">via print dialog</p>
+            </div>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ── CHAT PAGE ───────────────────────────────────────────────────── */
 export default function ChatPage({ paper: initialPaper, onBack }) {
   const [paper, setPaper]                 = useState(initialPaper)
@@ -1130,6 +1254,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
   const [audience,      setAudience]        = useState('default')
   const [showGlossary,  setShowGlossary]    = useState(false)
   const [showRecs,      setShowRecs]        = useState(false)
+  const [showNotes,     setShowNotes]       = useState(false)
   const toastCounter = useRef(0)
   const bottomRef    = useRef()
   const textareaRef  = useRef()
@@ -1207,12 +1332,151 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     showToast(`Exported ${pairs.length} flashcards`, 'info')
   }, [allMessages, paper, showToast])
 
+  const handleExportMarkdown = useCallback(() => {
+    const msgs = allMessages[paper.paper_id] || []
+    if (!msgs.length) { showToast('No messages to export yet', 'warn'); return }
+
+    const lines = [
+      `# PaperMind Session — ${paper.filename}`,
+      `*Exported: ${new Date().toLocaleString()}*`,
+      '',
+      '---',
+      '',
+    ]
+    for (let i = 0; i < msgs.length; i++) {
+      const msg = msgs[i]
+      if (msg.role === 'user') {
+        lines.push(`## Q: ${msg.content}`, '')
+      } else if (msg.role === 'assistant') {
+        const { answer, confidence, faithfulness, answer_relevancy, sources, grading } = msg.content || {}
+        if (answer) {
+          const clean = answer
+            .replace(/\*{0,2}ESSENCE:?\*{0,2}\s*/gi, '')
+            .replace(/\*{0,2}DETAIL:?\*{0,2}\s*/gi, '\n\n**Detail:**\n\n')
+            .trim()
+          lines.push(clean, '')
+        }
+        if (confidence != null) {
+          const metrics = [`Confidence: ${confidence.toFixed(1)}%`]
+          if (faithfulness != null) metrics.push(`Faithfulness: ${faithfulness.toFixed(2)}`)
+          if (answer_relevancy != null) metrics.push(`Relevancy: ${answer_relevancy.toFixed(2)}`)
+          lines.push(`*${metrics.join(' · ')}*`, '')
+        }
+        if (sources?.length) {
+          lines.push('**Sources:**')
+          sources.forEach(s => {
+            const tag = s.section_type === 'table' ? '[TABLE] ' : ''
+            lines.push(`- ${tag}${s.section} · Page ${s.page}`)
+          })
+          lines.push('')
+        }
+        if (grading?.removed_count > 0) {
+          lines.push(`*${grading.removed_count} unsupported sentence(s) removed by evidence grader.*`, '')
+        }
+        lines.push('---', '')
+      }
+    }
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${paper.filename.replace(/\.pdf$/i, '')}_session.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    showToast('Session exported as Markdown', 'info')
+  }, [allMessages, paper, showToast])
+
+  const handleExportPDF = useCallback(() => {
+    const msgs = allMessages[paper.paper_id] || []
+    if (!msgs.length) { showToast('No messages to export yet', 'warn'); return }
+
+    const qaCount = msgs.filter(m => m.role === 'user').length
+    const rows = []
+    for (const msg of msgs) {
+      if (msg.role === 'user') {
+        rows.push(`<div class="question"><div class="q-label">Q</div><p>${escapeHtml(msg.content)}</p></div>`)
+      } else if (msg.role === 'assistant') {
+        const { answer, confidence, faithfulness, answer_relevancy, sources, grading } = msg.content || {}
+        const clean = (answer || '')
+          .replace(/\*{0,2}ESSENCE:?\*{0,2}\s*/gi, '')
+          .replace(/\*{0,2}DETAIL:?\*{0,2}\s*/gi, '\n\n')
+          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+          .trim()
+
+        const metricsHtml = confidence != null
+          ? `<div class="metrics"><span>Confidence: <b>${confidence.toFixed(1)}%</b></span>${faithfulness != null ? `<span>Faithfulness: <b>${faithfulness.toFixed(2)}</b></span>` : ''}${answer_relevancy != null ? `<span>Relevancy: <b>${answer_relevancy.toFixed(2)}</b></span>` : ''}</div>`
+          : ''
+
+        const sourcesHtml = sources?.length
+          ? `<div class="sources"><span class="sources-label">Sources</span>${sources.map(s => `<span class="chip">${escapeHtml(s.section_type === 'table' ? '▦ ' + s.section : s.section)} · p.${s.page}</span>`).join('')}</div>`
+          : ''
+
+        const graderNote = grading?.removed_count > 0
+          ? `<p class="grader-note">↳ ${grading.removed_count} unsupported sentence(s) removed by evidence grader.</p>`
+          : ''
+
+        const bodyHtml = clean
+          .split(/\n\n+/)
+          .filter(Boolean)
+          .map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
+          .join('')
+
+        rows.push(`<div class="answer"><div class="a-label">A</div><div class="a-content">${bodyHtml}${metricsHtml}${sourcesHtml}${graderNote}</div></div>`)
+      }
+    }
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PaperMind — ${escapeHtml(paper.filename)}</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Georgia, 'Times New Roman', serif; max-width: 720px; margin: 48px auto; color: #1a1a1a; line-height: 1.75; font-size: 14px; }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .meta { font-size: 11px; color: #888; margin-bottom: 36px; font-family: monospace; }
+  .question { display: flex; gap: 16px; margin-bottom: 10px; }
+  .q-label { background: #0f172a; color: #22d3ee; font-family: monospace; font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 4px; height: fit-content; flex-shrink: 0; margin-top: 3px; letter-spacing: 0.08em; }
+  .question p { font-size: 16px; font-weight: 600; }
+  .answer { display: flex; gap: 16px; margin-bottom: 32px; padding-bottom: 32px; border-bottom: 1px solid #e5e7eb; }
+  .a-label { background: #f3f4f6; color: #6b7280; font-family: monospace; font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 4px; height: fit-content; flex-shrink: 0; margin-top: 3px; letter-spacing: 0.08em; }
+  .a-content { flex: 1; }
+  .a-content p { margin-bottom: 10px; }
+  .metrics { font-size: 11px; color: #6b7280; margin: 10px 0; display: flex; gap: 20px; font-family: monospace; }
+  .metrics span b { color: #374151; }
+  .sources { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sources-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.12em; color: #9ca3af; font-family: monospace; margin-right: 4px; }
+  .chip { font-size: 10px; font-family: monospace; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 2px 10px; border-radius: 100px; color: #4b5563; }
+  .grader-note { font-size: 11px; color: #9ca3af; font-style: italic; margin-top: 10px; font-family: monospace; }
+  @media print { body { margin: 24px; } }
+</style>
+</head>
+<body>
+  <h1>PaperMind — ${escapeHtml(paper.filename)}</h1>
+  <p class="meta">Exported ${new Date().toLocaleString()} &nbsp;·&nbsp; ${qaCount} Q&amp;A pair${qaCount !== 1 ? 's' : ''}</p>
+  ${rows.join('\n  ')}
+</body>
+</html>`
+
+    const win = window.open('', '_blank')
+    if (!win) { showToast('Allow pop-ups to export PDF', 'warn'); return }
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    setTimeout(() => win.print(), 400)
+    showToast('Print dialog opened — save as PDF', 'info')
+  }, [allMessages, paper, showToast])
+
   const handleCommand = (cmd) => {
     if (cmd === 'upload')    onBack()
     if (cmd === 'compare')   { setCompareMode(p => !p); showToast('Compare mode ' + (!compareMode ? 'enabled' : 'disabled'), 'info') }
+    if (cmd === 'notes')     setShowNotes(true)
     if (cmd === 'glossary')  setShowGlossary(true)
     if (cmd === 'recommend') setShowRecs(true)
-    if (cmd === 'flashcard') handleExportFlashcards()
+    if (cmd === 'flashcard')   handleExportFlashcards()
+    if (cmd === 'export-md')  handleExportMarkdown()
+    if (cmd === 'export-pdf') handleExportPDF()
     if (cmd === 'clear')     setAllMessages(prev => {
       const next = { ...prev, [paper.paper_id]: [] }
       try { localStorage.setItem('papermind_chats', JSON.stringify(next)) } catch {}
@@ -1313,6 +1577,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       <CosmicOrbs />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       {showCmdPalette && <CommandPalette onClose={() => setShowCmdPalette(false)} onCommand={handleCommand} />}
+      {showNotes     && <NotesPanel     paperId={paper.paper_id} paperName={paper.filename} onClose={() => setShowNotes(false)} />}
       {showGlossary  && <GlossaryPanel  paperId={paper.paper_id} onClose={() => setShowGlossary(false)} />}
       {showRecs      && <RecsPanel      paperId={paper.paper_id} onClose={() => setShowRecs(false)} onImport={r => { setShowRecs(false); showToast(`Importing "${r.title.slice(0,40)}…"`, 'info') }} />}
 
@@ -1361,6 +1626,19 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                   className="text-violet-400/50 hover:text-violet-300 transition-colors text-sm leading-none ml-1">×</button>
               </div>
             )}
+
+            {/* Notes */}
+            <button onClick={() => setShowNotes(n => !n)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
+              style={showNotes
+                ? { background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.25)', color: 'rgba(52,211,153,0.9)' }
+                : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: 'rgba(107,114,128,1)' }}>
+              <span className="text-[11px]">✎</span>
+              <span className="text-[9px] uppercase tracking-wider" style={{ fontFamily: 'var(--font-mono)' }}>Notes</span>
+            </button>
+
+            {/* Export */}
+            <ExportMenu onExportMd={handleExportMarkdown} onExportPdf={handleExportPDF} />
 
             {/* ⌘K hint */}
             <button onClick={() => setShowCmdPalette(true)}
@@ -1530,8 +1808,9 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
 
           {/* Empty state */}
           {messages.length === 0 && !loading && (
-            <div className="text-center py-16">
-              <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-6"
+            <div className="text-center py-14 max-w-2xl mx-auto">
+              {/* Paper icon */}
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5"
                 style={{
                   background: 'linear-gradient(145deg, rgba(0,245,255,0.08), rgba(0,245,255,0.02))',
                   border: '1px solid rgba(0,245,255,0.12)',
@@ -1539,16 +1818,23 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                 }}>
                 <svg className="w-6 h-6 text-cyan-400/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5"
-                    d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
               </div>
-              <h2 className="text-xl font-semibold text-white mb-2" style={{ fontFamily: 'var(--font-display)' }}>
-                Initialize Context
+
+              {/* Paper title */}
+              <h2 className="text-lg font-semibold text-white mb-1 px-8 leading-snug" style={{ fontFamily: 'var(--font-display)' }}>
+                {paper.filename.replace(/\.pdf$/i, '')}
               </h2>
-              <p className="text-gray-600 text-sm font-light max-w-xs mx-auto mb-8">
-                Ask anything about the paper, or start with one of these:
+              <p className="text-[10px] uppercase tracking-[0.2em] text-cyan-400/50 font-bold mb-8" style={{ fontFamily: 'var(--font-mono)' }}>
+                Ready to answer questions
               </p>
-              <div className="flex flex-wrap gap-2 justify-center max-w-lg mx-auto">
+
+              {/* Starter questions */}
+              <p className="text-gray-700 text-xs uppercase tracking-[0.18em] font-bold mb-3" style={{ fontFamily: 'var(--font-mono)' }}>
+                Try asking
+              </p>
+              <div className="flex flex-wrap gap-2 justify-center mb-10">
                 {STARTER_QUESTIONS.map((q, i) => (
                   <button key={i} onClick={() => handleFollowUp(q)}
                     className="text-sm px-4 py-2 rounded-full transition-all"
@@ -1560,6 +1846,25 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
                     onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,245,255,0.08)'; e.currentTarget.style.color = 'rgba(34,211,238,1)' }}
                     onMouseLeave={e => { e.currentTarget.style.background = 'rgba(0,245,255,0.04)'; e.currentTarget.style.color = 'rgba(34,211,238,0.7)' }}>
                     {q}
+                  </button>
+                ))}
+              </div>
+
+              {/* Feature hints */}
+              <div className="grid grid-cols-3 gap-3 max-w-lg mx-auto">
+                {[
+                  { icon: '§', label: 'Glossary', desc: 'Jargon explained', cmd: () => setShowGlossary(true) },
+                  { icon: '✎', label: 'Notes',    desc: 'Annotate the paper', cmd: () => setShowNotes(true) },
+                  { icon: '⇔', label: 'Compare',  desc: 'vs another paper', cmd: () => setShowSwitcher(true) },
+                ].map(f => (
+                  <button key={f.label} onClick={f.cmd}
+                    className="flex flex-col items-center gap-1.5 px-3 py-3.5 rounded-2xl transition-all"
+                    style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor = 'rgba(0,245,255,0.12)' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)' }}>
+                    <span className="text-gray-600 text-base">{f.icon}</span>
+                    <span className="text-gray-500 text-xs font-semibold">{f.label}</span>
+                    <span className="text-gray-700 text-[10px]">{f.desc}</span>
                   </button>
                 ))}
               </div>
@@ -1619,9 +1924,17 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
               </button>
             </div>
           </div>
-          <p className="text-center text-gray-700 text-[10px] uppercase tracking-[0.2em] mt-3 font-medium">
-            Enter to stream · Shift+Enter for newline · ↑ recall · ⌘K commands
-          </p>
+          <div className="flex items-center justify-center gap-4 mt-3">
+            <p className="text-gray-700 text-[10px] uppercase tracking-[0.2em] font-medium">
+              Enter to stream · Shift+Enter for newline · ↑ recall · ⌘K commands
+            </p>
+            {messages.length > 0 && (
+              <span className="flex items-center gap-1 text-[9px] text-gray-700 uppercase tracking-wider flex-shrink-0" style={{ fontFamily: 'var(--font-mono)' }}>
+                <span className="w-1 h-1 rounded-full bg-emerald-500/50" />
+                Session saved
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>
