@@ -1115,6 +1115,206 @@ function RecsPanel({ paperId, onClose, onImport }) {
   )
 }
 
+/* ── SIDE-BY-SIDE COMPARE ────────────────────────────────────────── */
+function PaperPane({ result, paperId, paperName, label, isNewest }) {
+  const [copied,     setCopied]     = useState(false)
+  const [showDetail, setShowDetail] = useState(false)
+
+  const { answer, confidence, faithfulness, answer_relevancy, sources, grading, attempts } = result
+
+  const parseAnswer = (text) => {
+    if (!text) return { essence: '', detail: '' }
+    const essenceMatch = text.match(/\*{0,2}ESSENCE:?\*{0,2}/i)
+    const working = essenceMatch ? text.slice(essenceMatch.index) : text
+    const stripEssence = t => t.replace(/^\*{0,2}ESSENCE:?\*{0,2}\s*/i, '').trim()
+    const detailRe = /\n\s*\*{0,2}DETAIL:?\*{0,2}\s*/i
+    const match = working.match(detailRe)
+    if (match) return { essence: stripEssence(working.slice(0, match.index)), detail: working.slice(match.index + match[0].length).trim() }
+    return { essence: stripEssence(working), detail: '' }
+  }
+
+  const { essence, detail } = parseAnswer(answer)
+
+  const A = label === 'A'
+  const accent = {
+    bg:     A ? 'rgba(0,245,255,0.1)'    : 'rgba(139,92,246,0.1)',
+    border: A ? 'rgba(0,245,255,0.25)'   : 'rgba(139,92,246,0.3)',
+    color:  A ? '#22d3ee'                : '#a78bfa',
+    glow:   A ? 'rgba(0,245,255,0.7)'   : 'rgba(139,92,246,0.7)',
+    dot:    A ? '#00f5ff'               : '#a78bfa',
+    ring:   A ? 'cyan'                  : 'violet',
+    grad:   A ? 'rgba(0,245,255,0.25)'  : 'rgba(139,92,246,0.25)',
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      {/* Label + paper name */}
+      <div className="flex items-center gap-2.5">
+        <span className="text-[9px] font-bold uppercase tracking-[0.18em] px-2.5 py-1 rounded-full flex-shrink-0"
+          style={{ background: accent.bg, border: `1px solid ${accent.border}`, color: accent.color, fontFamily: 'var(--font-mono)' }}>
+          Paper {label}
+        </span>
+        <span className="text-xs text-gray-500 truncate font-medium">{paperName.replace(/\.pdf$/i, '')}</span>
+      </div>
+
+      {/* Accent rule */}
+      <div className="h-px" style={{ background: `linear-gradient(90deg, ${accent.grad}, transparent)` }} />
+
+      {/* Answer */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+            style={{ background: accent.dot, boxShadow: `0 0 6px ${accent.glow}` }} />
+          <span className="text-[9px] uppercase tracking-[0.2em] font-bold" style={{ color: accent.color }}>Answer</span>
+        </div>
+        <GradedAnswer text={essence} grades={grading?.grades} animate={isNewest} />
+      </div>
+
+      {/* Detail accordion */}
+      {detail && (
+        <div>
+          <button onClick={() => setShowDetail(d => !d)}
+            className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors"
+            style={{ color: showDetail ? accent.color : 'rgba(75,85,99,1)', fontFamily: 'var(--font-mono)' }}>
+            <svg className={`w-3 h-3 transition-transform ${showDetail ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" />
+            </svg>
+            Full breakdown
+          </button>
+          {showDetail && (
+            <div className="mt-3 text-gray-400 text-xs leading-relaxed markdown-content animate-slide-down">
+              <ReactMarkdown>{detail}</ReactMarkdown>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Metrics */}
+      <div className="flex items-center gap-4 pt-4 border-t" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+        <MetricRing label="Confidence"   value={confidence}          isPercentage={true} accent={accent.ring} />
+        <MetricRing label="Faithfulness" value={faithfulness || 0}                       accent={accent.ring} />
+        <MetricRing label="Relevancy"    value={answer_relevancy || 0}                   accent={accent.ring} />
+      </div>
+
+      {/* Sources */}
+      {sources?.length > 0 && (
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.18em] text-gray-700 font-bold mb-2">Sources</p>
+          <div className="flex flex-wrap gap-1.5">
+            {sources.map((s, i) => <SourceChip key={i} source={{ ...s, paper_label: undefined }} paperId={paperId} />)}
+          </div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.03)' }}>
+        {attempts > 1 && (
+          <span className="text-[9px] uppercase tracking-wider text-amber-500/60" style={{ fontFamily: 'var(--font-mono)' }}>
+            {attempts} cycles
+          </span>
+        )}
+        <button onClick={() => { navigator.clipboard.writeText(essence).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }) }}
+          className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors px-2 py-1 rounded-lg ml-auto"
+          style={{ fontFamily: 'var(--font-mono)', color: copied ? 'rgb(52,211,153)' : 'rgba(75,85,99,1)' }}>
+          {copied
+            ? <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" /></svg>Copied</>
+            : <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>Copy</>
+          }
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function CompareLoadingStepper({ paper, comparePaper2, progressA, progressB }) {
+  return (
+    <div className="flex justify-start mb-8">
+      <div className="w-full">
+        <div className="grid grid-cols-2 rounded-2xl overflow-hidden"
+          style={{ border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.01)' }}>
+          <div className="absolute top-0 left-0 right-0 h-px pointer-events-none"
+            style={{ background: 'linear-gradient(90deg, rgba(0,245,255,0.3), rgba(139,92,246,0.3), transparent)' }} />
+          <div className="p-6" style={{ borderRight: '1px solid rgba(255,255,255,0.05)' }}>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-[9px] font-bold uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                style={{ background: 'rgba(0,245,255,0.1)', border: '1px solid rgba(0,245,255,0.25)', color: '#22d3ee', fontFamily: 'var(--font-mono)' }}>
+                Paper A
+              </span>
+              <span className="text-[10px] text-gray-600 truncate">{paper.filename.replace(/\.pdf$/i, '').slice(0, 24)}</span>
+            </div>
+            <PipelineStepper progress={progressA} />
+          </div>
+          <div className="p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-[9px] font-bold uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)', color: '#a78bfa', fontFamily: 'var(--font-mono)' }}>
+                Paper B
+              </span>
+              <span className="text-[10px] text-gray-600 truncate">{comparePaper2.filename.replace(/\.pdf$/i, '').slice(0, 24)}</span>
+            </div>
+            <PipelineStepper progress={progressB} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SideBySideMessage({ msg, isNewest, onFollowUp }) {
+  const { paperA, paperB } = msg.content
+  return (
+    <div className="flex justify-start mb-8">
+      <div className="w-full">
+        {/* Badge */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-[8px] font-bold uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+            style={{
+              background: 'linear-gradient(135deg, rgba(0,245,255,0.08), rgba(139,92,246,0.08))',
+              border: '1px solid rgba(139,92,246,0.3)',
+              color: 'rgba(167,139,250,0.9)',
+              fontFamily: 'var(--font-mono)',
+            }}>
+            ⇔ Side-by-Side Comparison
+          </span>
+        </div>
+
+        {/* Split card */}
+        <div className="grid grid-cols-2 rounded-2xl overflow-hidden relative"
+          style={{
+            border: '1px solid rgba(255,255,255,0.06)',
+            background: 'linear-gradient(145deg, rgba(255,255,255,0.025), rgba(255,255,255,0.01))',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+          }}>
+          <div className="absolute top-0 left-0 right-0 h-px pointer-events-none"
+            style={{ background: 'linear-gradient(90deg, rgba(0,245,255,0.4), rgba(139,92,246,0.4), transparent)' }} />
+          <div className="p-7" style={{ borderRight: '1px solid rgba(255,255,255,0.05)' }}>
+            <PaperPane result={paperA.result} paperId={paperA.id} paperName={paperA.filename} label="A" isNewest={isNewest} />
+          </div>
+          <div className="p-7">
+            <PaperPane result={paperB.result} paperId={paperB.id} paperName={paperB.filename} label="B" isNewest={isNewest} />
+          </div>
+        </div>
+
+        {/* Follow-up chips */}
+        <div className="mt-5 pt-4 border-t border-white/[0.03]">
+          <p className="text-[9px] uppercase tracking-[0.2em] text-gray-700 mb-2.5 font-bold">Ask a follow-up</p>
+          <div className="flex flex-wrap gap-2">
+            {FOLLOW_UPS.comparison.map((q, i) => (
+              <button key={i} onClick={() => onFollowUp(q)}
+                className="text-[11px] px-3 py-1.5 rounded-full transition-all"
+                style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', color: 'rgba(107,114,128,1)' }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(139,92,246,0.25)'; e.currentTarget.style.background = 'rgba(139,92,246,0.04)'; e.currentTarget.style.color = '#c4b5fd' }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; e.currentTarget.style.color = 'rgba(107,114,128,1)' }}>
+                {q}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ── NOTES PANEL ─────────────────────────────────────────────────── */
 function NotesPanel({ paperId, paperName, onClose }) {
   const storageKey = `papermind_notes_${paperId}`
@@ -1254,7 +1454,8 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
   const [audience,      setAudience]        = useState('default')
   const [showGlossary,  setShowGlossary]    = useState(false)
   const [showRecs,      setShowRecs]        = useState(false)
-  const [showNotes,     setShowNotes]       = useState(false)
+  const [showNotes,      setShowNotes]       = useState(false)
+  const [compareProgress, setCompareProgress] = useState({ a: [], b: [] })
   const toastCounter = useRef(0)
   const bottomRef    = useRef()
   const textareaRef  = useRef()
@@ -1517,21 +1718,52 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     const question = prefix ? prefix + raw : raw
     setInput('')
     const paperId = paper.paper_id
+
     setAllMessages(prev => ({
       ...prev,
       [paperId]: [...(prev[paperId] || []), { role: 'user', content: raw }],
     }))
     setLoading(true)
-    setProgress([])
 
+    // ── Side-by-side compare: two parallel streams ──
+    if (compareMode && comparePaper2) {
+      setCompareProgress({ a: [], b: [] })
+      try {
+        const [resultA, resultB] = await Promise.all([
+          queryPaperStream(paperId, question, ({ type, data }) => {
+            if (type === 'progress') setCompareProgress(p => ({ ...p, a: [...p.a, { stage: data.stage, message: data.message }] }))
+          }),
+          queryPaperStream(comparePaper2.paper_id, question, ({ type, data }) => {
+            if (type === 'progress') setCompareProgress(p => ({ ...p, b: [...p.b, { stage: data.stage, message: data.message }] }))
+          }),
+        ])
+        setAllMessages(prev => ({
+          ...prev,
+          [paperId]: [...(prev[paperId] || []), {
+            role: 'assistant',
+            content: {
+              is_side_by_side: true,
+              paperA: { id: paperId, filename: paper.filename, result: resultA },
+              paperB: { id: comparePaper2.paper_id, filename: comparePaper2.filename, result: resultB },
+            },
+          }],
+        }))
+      } catch (err) {
+        showToast(err?.message || 'Comparison failed — please try again', 'error')
+      } finally {
+        setLoading(false)
+        setCompareProgress({ a: [], b: [] })
+      }
+      return
+    }
+
+    // ── Single-paper query ──
+    setProgress([])
     const onEvent = ({ type, data }) => {
       if (type === 'progress') setProgress(prev => [...prev, { stage: data.stage, message: data.message }])
     }
-
     try {
-      const result = (compareMode && comparePaper2)
-        ? await comparePapersStream(paperId, comparePaper2.paper_id, question, onEvent)
-        : await queryPaperStream(paperId, question, onEvent)
+      const result = await queryPaperStream(paperId, question, onEvent)
       setAllMessages(prev => ({
         ...prev,
         [paperId]: [...(prev[paperId] || []), { role: 'assistant', content: result }],
@@ -1872,6 +2104,16 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
           )}
 
           {messages.map((msg, i) => {
+            if (msg.role === 'assistant' && msg.content?.is_side_by_side) {
+              return (
+                <SideBySideMessage
+                  key={i}
+                  msg={msg}
+                  isNewest={i === messages.length - 1 && !loading}
+                  onFollowUp={handleFollowUp}
+                />
+              )
+            }
             const scoreHistory = messages
               .slice(0, i + 1)
               .filter(m => m.role === 'assistant' && m.content?.confidence != null)
@@ -1888,7 +2130,12 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
             )
           })}
 
-          {loading && <PipelineStepper progress={progress} />}
+          {loading && compareMode && comparePaper2
+            ? <CompareLoadingStepper paper={paper} comparePaper2={comparePaper2} progressA={compareProgress.a} progressB={compareProgress.b} />
+            : loading
+              ? <PipelineStepper progress={progress} />
+              : null
+          }
 
           <div ref={bottomRef} className="h-40" />
         </div>
