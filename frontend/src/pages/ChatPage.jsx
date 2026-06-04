@@ -738,8 +738,24 @@ function PipelineStepper({ progress }) {
   )
 }
 
+/* ── HIGHLIGHT TEXT ──────────────────────────────────────────────── */
+function HighlightText({ text, query }) {
+  if (!query || !text) return text
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'))
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase()
+          ? <mark key={i} style={{ background: 'rgba(255,255,255,0.28)', color: '#fff', borderRadius: 2, padding: '0 1px' }}>{part}</mark>
+          : part
+      )}
+    </>
+  )
+}
+
 /* ── MESSAGE ─────────────────────────────────────────────────────── */
-function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory }) {
+function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory, highlight }) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [showTrace,  setShowTrace]  = useState(false)
   const [copied,     setCopied]     = useState(false)
@@ -756,7 +772,9 @@ function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory }) {
       <div className="flex justify-end mb-8">
         <div className="bg-gradient-to-br from-blue-600/90 to-cyan-500/90 text-white rounded-3xl rounded-tr-sm px-6 py-4 max-w-xl shadow-xl"
           style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
-          <p className="text-sm leading-relaxed">{msg.content}</p>
+          <p className="text-sm leading-relaxed">
+            {highlight ? <HighlightText text={msg.content} query={highlight} /> : msg.content}
+          </p>
         </div>
       </div>
     )
@@ -1115,6 +1133,38 @@ function RecsPanel({ paperId, onClose, onImport }) {
   )
 }
 
+/* ── SEARCH BAR ──────────────────────────────────────────────────── */
+function SearchBar({ query, onChange, matchCount, totalCount, onClose }) {
+  const inputRef = useRef()
+  useEffect(() => { inputRef.current?.focus() }, [])
+  const hasQuery = query.trim().length > 0
+  return (
+    <div className="border-b flex items-center gap-4 px-8 py-3 animate-slide-down"
+      style={{ background: 'rgba(0,0,0,0.45)', borderColor: 'rgba(255,255,255,0.04)', backdropFilter: 'blur(20px)' }}>
+      <svg className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      </svg>
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={e => onChange(e.target.value)}
+        placeholder="Search conversation…"
+        className="flex-1 bg-transparent text-sm text-white placeholder-gray-700 outline-none"
+      />
+      {hasQuery && (
+        <span className="text-[10px] font-bold flex-shrink-0 tabular-nums"
+          style={{ fontFamily: 'var(--font-mono)', color: matchCount > 0 ? 'rgba(0,245,255,0.65)' : 'rgba(248,113,113,0.7)' }}>
+          {matchCount} {matchCount === 1 ? 'match' : 'matches'}
+        </span>
+      )}
+      <button onClick={onClose}
+        className="w-5 h-5 flex items-center justify-center text-gray-600 hover:text-white transition-colors flex-shrink-0 text-lg leading-none">
+        ×
+      </button>
+    </div>
+  )
+}
+
 /* ── SIDE-BY-SIDE COMPARE ────────────────────────────────────────── */
 function PaperPane({ result, paperId, paperName, label, isNewest }) {
   const [copied,     setCopied]     = useState(false)
@@ -1454,13 +1504,45 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
   const [audience,      setAudience]        = useState('default')
   const [showGlossary,  setShowGlossary]    = useState(false)
   const [showRecs,      setShowRecs]        = useState(false)
-  const [showNotes,      setShowNotes]       = useState(false)
-  const [compareProgress, setCompareProgress] = useState({ a: [], b: [] })
+  const [showNotes,       setShowNotes]        = useState(false)
+  const [showSearch,      setShowSearch]       = useState(false)
+  const [searchQuery,     setSearchQuery]      = useState('')
+  const [compareProgress, setCompareProgress]  = useState({ a: [], b: [] })
   const toastCounter = useRef(0)
   const bottomRef    = useRef()
   const textareaRef  = useRef()
 
   const messages = allMessages[paper.paper_id] || []
+
+  const getMessageText = (msg) => {
+    if (msg.role === 'user') return typeof msg.content === 'string' ? msg.content : ''
+    if (msg.role === 'assistant') {
+      if (msg.content?.is_side_by_side)
+        return [msg.content.paperA?.result?.answer || '', msg.content.paperB?.result?.answer || ''].join(' ')
+      return msg.content?.answer || ''
+    }
+    return ''
+  }
+
+  const filteredMessages = useMemo(() => {
+    if (!searchQuery.trim()) return messages
+    const q = searchQuery.toLowerCase()
+    const included = new Set()
+    messages.forEach((msg, i) => {
+      if (getMessageText(msg).toLowerCase().includes(q)) {
+        included.add(i)
+        if (msg.role === 'user'      && i + 1 < messages.length) included.add(i + 1)
+        if (msg.role === 'assistant' && i > 0)                   included.add(i - 1)
+      }
+    })
+    return messages.filter((_, i) => included.has(i))
+  }, [messages, searchQuery]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const matchCount = useMemo(() => {
+    if (!searchQuery.trim()) return 0
+    const q = searchQuery.toLowerCase()
+    return messages.filter(m => getMessageText(m).toLowerCase().includes(q)).length
+  }, [messages, searchQuery]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const showToast = useCallback((message, type = 'info') => {
     const id = ++toastCounter.current
@@ -1509,6 +1591,12 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
         e.preventDefault()
         setShowCmdPalette(p => !p)
       }
+      // ⌘F / Ctrl+F → search
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault()
+        setShowSearch(p => !p)
+        if (!showSearch) setSearchQuery('')
+      }
       // Escape → close overlays
       if (e.key === 'Escape') {
         setShowCmdPalette(false)
@@ -1516,6 +1604,8 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
         setShowGlossary(false)
         setShowRecs(false)
         setShowNotes(false)
+        setShowSearch(false)
+        setSearchQuery('')
       }
     }
     window.addEventListener('keydown', handler)
@@ -1869,6 +1959,19 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
               </div>
             )}
 
+            {/* Search */}
+            <button onClick={() => { setShowSearch(s => !s); setSearchQuery('') }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
+              style={showSearch
+                ? { background: 'rgba(0,245,255,0.1)', border: '1px solid rgba(0,245,255,0.25)', color: 'rgba(0,245,255,0.9)' }
+                : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: 'rgba(107,114,128,1)' }}
+              title="Search conversation (⌘F)">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <span className="text-[9px] uppercase tracking-wider" style={{ fontFamily: 'var(--font-mono)' }}>Search</span>
+            </button>
+
             {/* Notes */}
             <button onClick={() => setShowNotes(n => !n)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
@@ -2044,12 +2147,23 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
         )}
       </header>
 
+      {/* ── SEARCH BAR ── */}
+      {showSearch && (
+        <SearchBar
+          query={searchQuery}
+          onChange={setSearchQuery}
+          matchCount={matchCount}
+          totalCount={messages.length}
+          onClose={() => { setShowSearch(false); setSearchQuery('') }}
+        />
+      )}
+
       {/* ── MESSAGE STREAM ── */}
       <main className="flex-1 overflow-y-auto px-8 py-12 custom-scrollbar" style={{ position: 'relative', zIndex: 1 }}>
         <div className="max-w-4xl mx-auto">
 
-          {/* Empty state */}
-          {messages.length === 0 && !loading && (
+          {/* Empty state — only when not searching */}
+          {messages.length === 0 && !loading && !searchQuery && (
             <div className="text-center py-14 max-w-2xl mx-auto">
               {/* Paper icon */}
               <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5"
@@ -2113,29 +2227,45 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
             </div>
           )}
 
-          {messages.map((msg, i) => {
+          {/* No-results state when searching */}
+          {searchQuery && filteredMessages.length === 0 && (
+            <div className="text-center py-20">
+              <p className="text-gray-600 text-sm mb-2">
+                No messages match <span className="text-cyan-400/70">"{searchQuery}"</span>
+              </p>
+              <button onClick={() => setSearchQuery('')}
+                className="text-[10px] uppercase tracking-wider text-gray-700 hover:text-gray-500 transition-colors font-bold"
+                style={{ fontFamily: 'var(--font-mono)' }}>
+                Clear search
+              </button>
+            </div>
+          )}
+
+          {filteredMessages.map((msg) => {
+            const originalIdx = messages.indexOf(msg)
             if (msg.role === 'assistant' && msg.content?.is_side_by_side) {
               return (
                 <SideBySideMessage
-                  key={i}
+                  key={originalIdx}
                   msg={msg}
-                  isNewest={i === messages.length - 1 && !loading}
+                  isNewest={!searchQuery && originalIdx === messages.length - 1 && !loading}
                   onFollowUp={handleFollowUp}
                 />
               )
             }
             const scoreHistory = messages
-              .slice(0, i + 1)
+              .slice(0, originalIdx + 1)
               .filter(m => m.role === 'assistant' && m.content?.confidence != null)
               .map(m => m.content.confidence)
             return (
               <Message
-                key={i}
+                key={originalIdx}
                 msg={msg}
                 paperId={paper.paper_id}
-                isNewest={i === messages.length - 1 && msg.role === 'assistant' && !loading}
+                isNewest={!searchQuery && originalIdx === messages.length - 1 && msg.role === 'assistant' && !loading}
                 onFollowUp={handleFollowUp}
                 scoreHistory={scoreHistory}
+                highlight={searchQuery || undefined}
               />
             )
           })}
@@ -2183,7 +2313,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
           </div>
           <div className="flex items-center justify-center gap-4 mt-3">
             <p className="text-gray-700 text-[10px] uppercase tracking-[0.2em] font-medium">
-              Enter to stream · Shift+Enter for newline · ↑ recall · ⌘K commands
+              Enter to stream · Shift+Enter for newline · ↑ recall · ⌘F search · ⌘K commands
             </p>
             {messages.length > 0 && (
               <span className="flex items-center gap-1 text-[9px] text-gray-700 uppercase tracking-wider flex-shrink-0" style={{ fontFamily: 'var(--font-mono)' }}>
