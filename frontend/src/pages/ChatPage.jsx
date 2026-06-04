@@ -1480,6 +1480,13 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     try { localStorage.setItem('papermind_chats', JSON.stringify(allMessages)) } catch {}
   }, [allMessages])
 
+  // Sync browser tab title to active paper
+  useEffect(() => {
+    const name = paper.filename.replace(/\.pdf$/i, '')
+    document.title = `${name} — PaperMind`
+    return () => { document.title = 'PaperMind' }
+  }, [paper.filename])
+
   // Auto-resize textarea as user types
   useEffect(() => {
     const el = textareaRef.current
@@ -1506,6 +1513,9 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       if (e.key === 'Escape') {
         setShowCmdPalette(false)
         setShowSwitcher(false)
+        setShowGlossary(false)
+        setShowRecs(false)
+        setShowNotes(false)
       }
     }
     window.addEventListener('keydown', handler)
@@ -1798,7 +1808,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     if (e.key === 'ArrowUp' && !input.trim()) {
       e.preventDefault()
       const lastUser = [...messages].reverse().find(m => m.role === 'user')
-      if (lastUser) setInput(lastUser.content)
+      if (lastUser && typeof lastUser.content === 'string') setInput(lastUser.content)
     }
   }
 
