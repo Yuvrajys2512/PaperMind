@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .env
 progress.txt
+progress/
 .claude/
 
 # QASPER eval dataset — reproducible via eval/qasper_loader.py

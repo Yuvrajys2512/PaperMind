@@ -3,12 +3,12 @@ ingestion/llm_client.py
 
 Unified LLM client with automatic provider rotation and fallback.
 
-Priority order (most generous → least):
-  1. Gemini Flash      — 1M tokens/day
-  2. Cerebras          — ~1M tokens/day
-  3. Mistral Small     — 1B tokens/month
-  4. Groq key 1        — 100k tokens/day
-  5. Groq key 2        — 100k tokens/day
+Priority order (fastest / most reliable first):
+  1. Groq key 1        — LPU, ~150ms, 100k tokens/day
+  2. Groq key 2        — same, second key for overflow
+  3. Gemini Flash Lite — free quota, ~1s, 2.5-flash-lite
+  4. Mistral Small     — reliable fallback, 1B tokens/month
+  5. Cerebras          — last: gpt-oss-120b returns null content intermittently
 
 On rate limit / quota errors the client automatically tries the next provider.
 On unexpected errors (network, auth) the error is re-raised immediately.

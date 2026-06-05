@@ -7,11 +7,16 @@ generation call. We judge both against the gold reference and compare:
 
     helped   judge(cleaned) > judge(original)   grading removed a bad sentence
     hurt     judge(cleaned) < judge(original)   grading removed a GOOD sentence
-    neutral  same verdict                        (incl. nothing removed)
+    neutral  same verdict, OR grader changed nothing (cleaned == original)
 
 Because both answers come from one generation, this isolates the grader's
 effect with no between-config variance and no model confound — far more
 sensitive than comparing the `full` vs `no_grader` ablation configs.
+
+IMPORTANT — only rows where the grader actually changed the text can be
+helped/hurt. When nothing is removed, cleaned == original, so judging the two
+separately would only sample judge variance and spuriously flip some rows.
+Those rows are forced to neutral and judged once. See the text_changed guard.
 
 For every HURT case we print the sentences the grader removed: the direct
 evidence of whether it is too aggressive.
@@ -106,18 +111,32 @@ def main() -> None:
 
                 gold_texts = [a["text"] for a in answers if a.get("answerable")]
 
-                j_clean = judge_answer(question, gold_texts, cleaned)
-                j_orig = judge_answer(question, gold_texts, original)
-                sc_clean, sc_orig = j_clean["score"], j_orig["score"]
-
-                if sc_clean is None or sc_orig is None:
-                    verdict = "unjudged"
-                elif sc_clean > sc_orig:
-                    verdict = "helped"
-                elif sc_clean < sc_orig:
-                    verdict = "hurt"
+                # When the grader changed nothing — no sentences removed, or
+                # grading failed and returned the answer untouched — `cleaned`
+                # and `original` are the SAME text. Judging them in two separate
+                # calls and comparing scores measures judge variance, not the
+                # grader: a stochastic judge will flip some identical-text rows
+                # to helped/hurt. Majority-vote only shrinks that noise; it does
+                # not remove it. So short-circuit on text equality — identical
+                # text is neutral by definition, and we judge only once.
+                text_changed = cleaned.strip() != original.strip()
+                if not text_changed:
+                    j_clean = j_orig = judge_answer(question, gold_texts, cleaned)
+                    sc_clean = sc_orig = j_clean["score"]
+                    verdict = "unjudged" if sc_clean is None else "neutral"
                 else:
-                    verdict = "neutral"
+                    j_clean = judge_answer(question, gold_texts, cleaned)
+                    j_orig = judge_answer(question, gold_texts, original)
+                    sc_clean, sc_orig = j_clean["score"], j_orig["score"]
+
+                    if sc_clean is None or sc_orig is None:
+                        verdict = "unjudged"
+                    elif sc_clean > sc_orig:
+                        verdict = "helped"
+                    elif sc_clean < sc_orig:
+                        verdict = "hurt"
+                    else:
+                        verdict = "neutral"
 
                 row = {
                     "paper_id": pid, "question_id": qid, "question": question,
@@ -146,6 +165,8 @@ def _summarize(rows: list[dict], out_path: Path) -> None:
         return
 
     effects = Counter(r["effect"] for r in rows)
+    # Rows where the grader actually altered the text — the only rows that can
+    # be helped/hurt. If this is 0, helped/hurt are both 0 by construction.
     removed_any = [r for r in rows if r["removed_count"] > 0]
 
     def _mean(key):

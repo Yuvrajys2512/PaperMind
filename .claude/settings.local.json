@@ -76,7 +76,8 @@
       "Bash(git *)",
       "Bash(venv/Scripts/python.exe -c \"from ingestion.rewriter import rewrite_text; print\\('rewriter OK'\\)\")",
       "Bash(venv/Scripts/python.exe -c \"from api.main import app; print\\('main OK'\\)\")",
-      "Bash(dir \"C:\\\\Users\\\\Yuvraj Srivastava\\\\Desktop\\\\Projects\\\\PaperMind\")"
+      "Bash(dir \"C:\\\\Users\\\\Yuvraj Srivastava\\\\Desktop\\\\Projects\\\\PaperMind\")",
+      "Bash(venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('eval/analyze_grader.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK: parses clean'\\)\")"
     ]
   }
 }
