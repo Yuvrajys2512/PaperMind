@@ -16,11 +16,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      # The tests/ suite covers eval/metrics.py — pure functions with no torch /
-      # chromadb / network. So CI only needs pytest, not the full ML stack,
-      # keeping this job fast (~30s instead of several minutes installing torch).
-      - name: Install test deps
-        run: pip install pytest
+      # The tests/ suite is deliberately offline: chunking uses an injected fake
+      # tokenizer, the off-topic guard mocks its LLM call, and metrics are pure
+      # functions. So CI installs only these light deps (no torch / chromadb),
+      # keeping the job fast (~30s instead of minutes installing the ML stack).
+      - name: Install test + lint deps
+        run: pip install pytest ruff tiktoken openai python-dotenv
+
+      - name: Lint (ruff)
+        run: ruff check .
 
       - name: Run tests
         run: pytest -q
