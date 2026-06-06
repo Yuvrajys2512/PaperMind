@@ -1,0 +1,23 @@
+# Ruff configuration — https://docs.astral.sh/ruff/
+# Pragmatic ruleset: enforce correctness + import hygiene, tolerate the
+# project's aligned-comment style and intentional late imports.
+
+line-length = 100
+target-version = "py311"
+
+# Throwaway / generated / non-source trees are not linted.
+extend-exclude = ["scripts", "data", "frontend", "venv", "logs", "output"]
+
+[lint]
+select = [
+  "E",  # pycodestyle errors
+  "F",  # pyflakes — unused imports, undefined names, real bugs
+]
+# NOTE: isort (I) is deliberately NOT enabled. Alphabetizing imports reorders
+# when torch (sentence-transformers) loads relative to onnxruntime (chromadb),
+# which causes a native OpenMP load-order segfault on import. Import order here
+# is load-bearing, so we leave it alone.
+ignore = [
+  "E501",  # line-too-long: codebase uses aligned trailing comments; not worth reflowing
+  "E402",  # module-import-not-at-top: eval/ scripts set sys.path before importing
+]

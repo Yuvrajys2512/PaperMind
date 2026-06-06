@@ -8,17 +8,16 @@ is suspect — which is exactly why they're worth pinning down.
 """
 
 from eval.metrics import (
-    normalize_text,
-    token_f1,
-    looks_like_abstention,
-    is_no_answer,
     answer_f1,
-    gold_is_answerable,
     answerable_correct,
     evidence_recall,
     evidence_token_f1,
+    gold_is_answerable,
+    is_no_answer,
+    looks_like_abstention,
+    normalize_text,
+    token_f1,
 )
-
 
 # --- normalize_text ---------------------------------------------------------
 

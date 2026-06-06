@@ -28,7 +28,6 @@ grade_answer(answer, chunks) -> dict
 
 from __future__ import annotations
 
-import json
 from ingestion.llm_client import chat_completion
 from ingestion.json_utils import parse_llm_json
 

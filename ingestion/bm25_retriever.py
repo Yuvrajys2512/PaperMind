@@ -1,6 +1,5 @@
 from rank_bm25 import BM25Okapi
 import chromadb
-import os
 
 _bm25_cache: dict[str, tuple] = {}  # paper_name -> (BM25Okapi, chunks)
 

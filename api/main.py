@@ -421,14 +421,16 @@ async def query_stream(request: QueryRequest):
     async def run_pipeline():
         try:
             if is_compare:
-                fn = lambda: compare_papers(
-                    request.question, paper_id_a, paper_id_b, on_progress=on_progress,
-                )
+                def fn():
+                    return compare_papers(
+                        request.question, paper_id_a, paper_id_b, on_progress=on_progress,
+                    )
                 timeout = 120.0
             else:
-                fn = lambda: answer_query(
-                    request.question, paper_id, request_id=req_id, on_progress=on_progress,
-                )
+                def fn():
+                    return answer_query(
+                        request.question, paper_id, request_id=req_id, on_progress=on_progress,
+                    )
                 timeout = 60.0
 
             result = await asyncio.wait_for(
