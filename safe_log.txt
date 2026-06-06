@@ -1,3 +1,0 @@
-Starting script...
-Imported pdf_parser
-Imported section_detector

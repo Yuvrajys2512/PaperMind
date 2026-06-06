@@ -15,6 +15,34 @@ function CosmicOrbs() {
   )
 }
 
+/* Derive landing-page stats from saved chat history (read once, at mount). */
+function computeSessionStats() {
+  const placeholder = [
+    { label: 'Avg Confidence', value: '—', sub: 'no sessions yet' },
+    { label: 'Faithfulness',   value: '—', sub: 'no sessions yet' },
+    { label: 'Multi-hop Rate', value: '—', sub: 'no sessions yet' },
+  ]
+  try {
+    const saved = localStorage.getItem('papermind_chats')
+    if (!saved) return placeholder
+    const msgs = Object.values(JSON.parse(saved))
+      .flat()
+      .filter(m => m.role === 'assistant' && m.content?.confidence != null)
+    if (msgs.length === 0) return placeholder
+    const avgConf  = msgs.reduce((s, m) => s + (m.content.confidence || 0), 0) / msgs.length
+    const avgFaith = msgs.reduce((s, m) => s + (m.content.faithfulness || 0), 0) / msgs.length
+    const multiHop = msgs.filter(m => m.content.plan?.complexity === 'multi_hop').length
+    const n = msgs.length
+    return [
+      { label: 'Avg Confidence', value: avgConf.toFixed(1) + '%',          sub: `across ${n} quer${n === 1 ? 'y' : 'ies'}` },
+      { label: 'Faithfulness',   value: (avgFaith * 100).toFixed(1) + '%', sub: 'evidence grading' },
+      { label: 'Multi-hop Rate', value: ((multiHop / n) * 100).toFixed(0) + '%', sub: 'of complex queries' },
+    ]
+  } catch {
+    return placeholder
+  }
+}
+
 /* ─────────────────────────────────────────────────────────────────
    UPLOAD PAGE
 ───────────────────────────────────────────────────────────────── */
@@ -31,31 +59,7 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
     listPapers().then(papers => setPaperCount(papers.filter(p => p.status === 'ready').length)).catch(() => {})
   }, [])
 
-  const [stats, setStats] = useState([
-    { label: 'Avg Confidence', value: '—', sub: 'no sessions yet' },
-    { label: 'Faithfulness',   value: '—', sub: 'no sessions yet' },
-    { label: 'Multi-hop Rate', value: '—', sub: 'no sessions yet' },
-  ])
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('papermind_chats')
-      if (!saved) return
-      const msgs = Object.values(JSON.parse(saved))
-        .flat()
-        .filter(m => m.role === 'assistant' && m.content?.confidence != null)
-      if (msgs.length === 0) return
-      const avgConf  = msgs.reduce((s, m) => s + (m.content.confidence || 0), 0) / msgs.length
-      const avgFaith = msgs.reduce((s, m) => s + (m.content.faithfulness || 0), 0) / msgs.length
-      const multiHop = msgs.filter(m => m.content.plan?.complexity === 'multi_hop').length
-      const n = msgs.length
-      setStats([
-        { label: 'Avg Confidence', value: avgConf.toFixed(1) + '%',          sub: `across ${n} quer${n === 1 ? 'y' : 'ies'}` },
-        { label: 'Faithfulness',   value: (avgFaith * 100).toFixed(1) + '%', sub: 'evidence grading' },
-        { label: 'Multi-hop Rate', value: ((multiHop / n) * 100).toFixed(0) + '%', sub: 'of complex queries' },
-      ])
-    } catch {}
-  }, [])
+  const [stats] = useState(computeSessionStats)
 
   const handleFile = useCallback(async (file) => {
     if (!file || !file.name.endsWith('.pdf')) {

@@ -146,8 +146,19 @@ export default function LibraryPage({ onOpen, onBack, onDiscover }) {
   }, [])
 
   useEffect(() => {
-    fetchPapers()
-  }, [fetchPapers])
+    let active = true
+    ;(async () => {
+      try {
+        const data = await listPapers()
+        if (active) setPapers(data)
+      } catch {
+        if (active) setError('Could not load library.')
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [])
 
   // Auto-refresh while any paper is still processing
   useEffect(() => {
