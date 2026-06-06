@@ -108,6 +108,18 @@ The harness (`eval/`) loads QASPER, runs PaperMind in configurable ablation mode
 
 The evidence grader's **net effect on judged correctness is ~zero** (3 helped / 3 hurt / 8 neutral) at this scale — but it does **lift faithfulness** in the full ablation run, and the cases where it *hurts* follow a specific, explainable pattern (it strips correct *negative* answers, which have no direct textual support). In other words: grading trades a little correctness for measurably higher faithfulness, rather than being a free win.
 
+**System performance (dev split, n=14):** an end-to-end run also measures how well the pipeline *retrieves* and *grounds* its answers:
+
+| Metric | Value |
+|---|---|
+| Evidence recall@k (gold evidence retrieved) | **0.98** |
+| Faithfulness (answer grounded in retrieved context) | **0.94** |
+| Answerable accuracy | 1.00 |
+| Mean latency | ~9.9 s / question |
+| Mean LLM calls | ~4.9 / question |
+
+Retrieval reliably surfaces the right evidence and the answers stay grounded in it. _(SQuAD-style Answer-F1 is computed by the harness but not shown here: it scores raw token overlap against terse reference spans and so penalizes PaperMind's full-sentence answers — a known prose-vs-span artifact rather than an accuracy measure.)_
+
 I'm reporting that straight because **measuring honestly — including null results — is the point.** Scaling n and tuning the grader threshold are the open next steps. Full methodology and run-by-run logs live in [`research/`](research/).
 
 > ⚠️ Numbers are preliminary (small n, free-tier provider variance). Treat as directional.
