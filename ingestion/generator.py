@@ -188,32 +188,101 @@ def _strip_chunk_refs(text: str) -> str:
     return text.strip()
 
 
-def _strip_scaffolding(answer: str) -> str:
-    """Remove leaked prompt scaffolding that some models (notably Llama-3.3-70B)
-    echo before the real answer — a '## FINAL ANSWER FORMAT' header and filler
-    preambles like 'Now writing the final answer.'
+# Verbatim descriptive text from SYSTEM_PROMPT (FINAL ANSWER FORMAT + RULES)
+# that weak models (e.g. Llama-3.1-8B) echo into the answer body instead of
+# following. Stored normalized (lowercase, single spaces, plain dashes) and
+# matched as substrings so an echoed line is dropped wherever it appears —
+# even when it trails an ESSENCE/DETAIL marker the anchor would otherwise keep.
+_SCAFFOLDING_SENTENCES = (
+    "2-3 sentences capturing the single most important insight",
+    "someone should grasp the core answer from this alone",
+    "expand using only what the context chunks explicitly state",
+    "follow the answer_structure steps in order as a silent writing guide",
+    "write flowing prose that covers each step invisibly",
+    "write flowing prose that covers each point invisibly",
+    "do not infer, connect, or editorialize beyond the source text",
+    "every sentence must be traceable to a specific chunk",
+    "maximum 2 paragraphs",
+    "use only the provided context chunks",
+    "never use outside knowledge",
+    "do not print them as headers or label them",
+)
 
-    The answer proper begins at the ESSENCE marker, so when it is present we
-    anchor there and drop everything before it. Otherwise we peel off known
-    scaffolding lines from the top.
+
+def _normalize_scaffolding(s: str) -> str:
+    """Lowercase, unify dashes/quotes, collapse whitespace — so prompt-template
+    echoes match regardless of the model's punctuation/spacing variants."""
+    import re
+    s = s.lower().replace("—", "-").replace("–", "-")
+    s = s.replace("“", '"').replace("”", '"').replace("’", "'")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _drop_scaffolding_sentences(answer: str) -> str:
+    """Remove prompt-template sentences echoed into the answer body.
+
+    Splits each line on the same boundaries as the grader's sentence splitter,
+    drops any unit whose normalized text contains a known scaffolding phrase,
+    and rejoins. A line left empty after scrubbing (e.g. a bare '**ESSENCE:**'
+    whose only content was template text) is dropped entirely.
+    """
+    import re
+    out_lines: list[str] = []
+    for line in answer.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            out_lines.append(line)
+            continue
+        kept: list[str] = []
+        parts = stripped.split(". ")
+        for i, part in enumerate(parts):
+            p = part.strip()
+            if not p:
+                continue
+            unit = p + "." if i < len(parts) - 1 else p
+            norm = _normalize_scaffolding(unit)
+            if any(phrase in norm for phrase in _SCAFFOLDING_SENTENCES):
+                continue
+            kept.append(unit)
+        rejoined = " ".join(kept).strip()
+        if rejoined:
+            out_lines.append(rejoined)
+    result = "\n".join(out_lines)
+    return re.sub(r"\n{3,}", "\n\n", result).strip()
+
+
+def _strip_scaffolding(answer: str) -> str:
+    """Remove leaked prompt scaffolding that models echo into the answer.
+
+    Two failure modes:
+      1. A preamble before the real answer — '## FINAL ANSWER FORMAT' headers,
+         'Now writing the final answer.' filler. Strong models (Llama-3.3-70B)
+         do this; we anchor at the ESSENCE marker or peel known top lines.
+      2. The template DESCRIPTIONS echoed verbatim as the answer body — weak
+         models (Llama-3.1-8B) copy 'Maximum 2 paragraphs.', 'Every sentence
+         must be traceable…' etc. instead of filling the template in. Anchoring
+         on ESSENCE alone KEEPS these (they follow the marker), so we then drop
+         them by phrase in _drop_scaffolding_sentences.
     """
     import re
     m = re.search(r'\*{0,2}ESSENCE', answer)
     if m:
-        return answer[m.start():].strip()
+        answer = answer[m.start():].strip()
+    else:
+        lines = answer.splitlines()
+        while lines:
+            head = lines[0].strip().lower()
+            if (not head
+                    or "final answer format" in head
+                    or head.startswith(("now writing", "now i will write",
+                                        "here is the final answer",
+                                        "here is my final answer"))):
+                lines.pop(0)
+                continue
+            break
+        answer = "\n".join(lines).strip()
 
-    lines = answer.splitlines()
-    while lines:
-        head = lines[0].strip().lower()
-        if (not head
-                or "final answer format" in head
-                or head.startswith(("now writing", "now i will write",
-                                    "here is the final answer",
-                                    "here is my final answer"))):
-            lines.pop(0)
-            continue
-        break
-    return "\n".join(lines).strip()
+    return _drop_scaffolding_sentences(answer)
 
 
 def _extract_reasoning_and_answer(full_response: str) -> tuple[str, str]:

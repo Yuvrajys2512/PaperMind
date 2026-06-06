@@ -11,6 +11,11 @@ Priority order (fastest / most reliable first):
   5. Cerebras          — last: gpt-oss-120b returns null content intermittently
 
 On rate limit / quota errors the client automatically tries the next provider.
+If a whole pass exhausts every provider AND at least one was hit by a
+self-clearing per-minute rate limit, the client sleeps (escalating backoff) and
+retries the chain — so transient TPM/RPM contention recovers instead of
+skipping the call. Daily-quota / auth / not-found errors do NOT trigger backoff
+(they can't clear in time); the call fails fast.
 On unexpected errors (network, auth) the error is re-raised immediately.
 
 Public API
@@ -20,6 +25,7 @@ chat_completion(messages, max_tokens, temperature) -> str
 
 from __future__ import annotations
 import os
+import time
 import threading
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -133,6 +139,34 @@ _SKIP_KEYWORDS = [
     "not_found", "404", "does not exist",
 ]
 
+# Rate-limit errors that recover ON THEIR OWN after a short wait — i.e. a
+# per-MINUTE TPM/RPM window (Groq's "Rate limit reached … please try again in
+# 2s"). These are worth sleeping on and retrying.
+#
+# Deliberately EXCLUDES daily-quota exhaustion (Gemini's "You exceeded your
+# current quota") and auth/not-found errors: those won't clear within a backoff
+# window (the quota resets in 24h), so sleeping on them only wastes wall-clock.
+# Such errors still match _SKIP_KEYWORDS → we skip that provider, but they do
+# NOT trigger a backoff-and-retry pass.
+_RETRYABLE_RATE_LIMIT = [
+    "rate limit reached",     # Groq, per-minute window
+    "please try again in",    # Groq appends a short retry hint
+    "requests per minute",
+    "tokens per minute",
+    "rpm", "tpm",
+]
+
+# Whole-loop backoff: when EVERY provider in one pass was momentarily
+# rate-limited, sleep and retry the whole chain. One entry per extra pass;
+# values are seconds. Bounded so a provider that is actually day-exhausted
+# (but reports via a retryable-looking message) costs at most ~sum(schedule).
+_BACKOFF_SCHEDULE = (5, 15, 30)
+
+
+def _is_retryable_rate_limit(err_str: str) -> bool:
+    """True if the error is a self-clearing per-minute rate limit (worth a wait)."""
+    return any(kw in err_str for kw in _RETRYABLE_RATE_LIMIT)
+
 
 def chat_completion(
     messages:    list[dict],
@@ -165,37 +199,61 @@ def chat_completion(
             raise RuntimeError(f"[llm_client] pinned provider '{name}' is not configured")
         providers = [{**base, "model": model}]
 
-    for provider in providers:
-        try:
-            response = provider["client"].chat.completions.create(
-                model       = provider["model"],
-                messages    = messages,
-                max_tokens  = max_tokens,
-                temperature = temperature,
-            )
-            content = response.choices[0].message.content
-            if content is None:
-                print(f"[llm_client] {provider['name']} returned null content — trying next provider...")
-                last_error = ValueError("null content")
-                continue
-            text = content.strip()
-            print(f"[llm_client] Used: {provider['name']}")
-            s = getattr(_stats_local, "stats", None)
-            if s is not None:
-                s["call_count"] += 1
-                s["providers"].append(provider["name"])
-            return text
+    # Outer loop = backoff passes. Pass 0 is the normal fast path (no sleep);
+    # each later pass is entered only if every provider in the previous pass was
+    # momentarily rate-limited, and is preceded by an escalating sleep. Note:
+    # time.sleep blocks the calling thread — fine for the eval CLI and bounded
+    # for live requests (max ~sum(_BACKOFF_SCHEDULE)).
+    for pass_idx in range(len(_BACKOFF_SCHEDULE) + 1):
+        if pass_idx > 0:
+            wait = _BACKOFF_SCHEDULE[pass_idx - 1]
+            print(f"[llm_client] all providers rate-limited — backing off {wait}s "
+                  f"(retry pass {pass_idx}/{len(_BACKOFF_SCHEDULE)})...")
+            time.sleep(wait)
 
-        except Exception as e:
-            err_str = str(e).lower()
-            if any(kw in err_str for kw in _SKIP_KEYWORDS):
-                print(f"[llm_client] {provider['name']} skipped "
-                      f"({type(e).__name__}: {str(e)[:120]}) — trying next provider...")
-                last_error = e
-                continue  # try the next provider
-            raise  # unexpected error — surface it immediately
+        saw_retryable = False
+
+        for provider in providers:
+            try:
+                response = provider["client"].chat.completions.create(
+                    model       = provider["model"],
+                    messages    = messages,
+                    max_tokens  = max_tokens,
+                    temperature = temperature,
+                )
+                content = response.choices[0].message.content
+                if content is None:
+                    print(f"[llm_client] {provider['name']} returned null content — trying next provider...")
+                    last_error = ValueError("null content")
+                    continue
+                text = content.strip()
+                print(f"[llm_client] Used: {provider['name']}")
+                s = getattr(_stats_local, "stats", None)
+                if s is not None:
+                    s["call_count"] += 1
+                    s["providers"].append(provider["name"])
+                return text
+
+            except Exception as e:
+                err_str = str(e).lower()
+                retryable = _is_retryable_rate_limit(err_str)
+                if retryable or any(kw in err_str for kw in _SKIP_KEYWORDS):
+                    saw_retryable = saw_retryable or retryable
+                    kind = "rate-limited (retryable)" if retryable else "skipped"
+                    print(f"[llm_client] {provider['name']} {kind} "
+                          f"({type(e).__name__}: {str(e)[:120]}) — trying next provider...")
+                    last_error = e
+                    continue  # try the next provider
+                raise  # unexpected error — surface it immediately
+
+        # A full pass completed with no success. Only sleep & retry if at least
+        # one provider was retryably rate-limited; if all failures were daily
+        # quota / auth / not-found, waiting cannot help — fail fast.
+        if not saw_retryable:
+            break
 
     raise RuntimeError(
-        f"[llm_client] All {len(_PROVIDERS)} provider(s) exhausted. "
+        f"[llm_client] All {len(providers)} provider(s) exhausted"
+        f"{' after backoff' if _BACKOFF_SCHEDULE else ''}. "
         f"Last error: {last_error}"
     )

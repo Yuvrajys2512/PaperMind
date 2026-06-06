@@ -12,6 +12,7 @@ consumed by:
 
 import json
 from ingestion.llm_client import chat_completion
+from ingestion.json_utils import parse_llm_json
 
 # ---------------------------------------------------------------------------
 # Planner prompt
@@ -91,7 +92,10 @@ def plan_query(query: str) -> dict:
     )
 
     try:
-        plan = json.loads(raw)
+        # parse_llm_json tolerates the ```json fences and invalid backslash
+        # escapes that free-tier models emit — both previously fell straight
+        # through to the degraded fallback plan.
+        plan = parse_llm_json(raw, expect="object")
         _validate_plan(plan)   # fills missing keys with defaults
     except (json.JSONDecodeError, Exception) as exc:
         print(f"[query_planner] WARNING: plan parse failed ({exc}). "

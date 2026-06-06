@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 from ingestion.llm_client import chat_completion
+from ingestion.json_utils import parse_llm_json
 
 # ---------------------------------------------------------------------------
 # Grader prompt
@@ -182,13 +183,10 @@ Classify every sentence. Return only the JSON array."""
             max_tokens=1024,
             temperature=0.0,
         )
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
-
-        grades = json.loads(raw)
+        # parse_llm_json strips the ```json fence and repairs invalid backslash
+        # escapes (LaTeX/math the model puts inside string values) that were
+        # crashing strict json.loads → whole grade discarded.
+        grades = parse_llm_json(raw, expect="array")
         return grades if isinstance(grades, list) else None
 
     except Exception as exc:
