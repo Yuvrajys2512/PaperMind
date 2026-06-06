@@ -1,46 +1,147 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { uploadPaper, getPaperStatus, listPapers } from '../api'
 
+/* Single restrained accent for the whole page. */
+const ACCENT = '#22d3ee'
+
 /* ─────────────────────────────────────────────────────────────────
-   COSMIC ORBS  (same as ChatPage)
+   BACKGROUND — quiet dot grid + one soft top glow. No orbs, no scan.
 ───────────────────────────────────────────────────────────────── */
-function CosmicOrbs() {
+function Backdrop() {
   return (
     <>
-      <div className="cosmic-orb-cyan" />
-      <div className="cosmic-orb-violet" />
-      <div className="cosmic-orb-pink" />
-      <div className="scan-line" />
+      {/* dot grid */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          backgroundImage: 'radial-gradient(rgba(255,255,255,0.045) 1px, transparent 1px)',
+          backgroundSize: '24px 24px',
+          maskImage: 'radial-gradient(ellipse 80% 60% at 50% 30%, #000 40%, transparent 100%)',
+          WebkitMaskImage: 'radial-gradient(ellipse 80% 60% at 50% 30%, #000 40%, transparent 100%)',
+          zIndex: 0,
+        }}
+      />
+      {/* one soft accent glow, top-center — subtle, not a floating orb */}
+      <div
+        className="fixed pointer-events-none"
+        style={{
+          top: '-220px', left: '50%', transform: 'translateX(-50%)',
+          width: 900, height: 500,
+          background: `radial-gradient(ellipse at center, ${ACCENT}14 0%, transparent 65%)`,
+          filter: 'blur(40px)',
+          zIndex: 0,
+        }}
+      />
     </>
   )
 }
 
 /* Derive landing-page stats from saved chat history (read once, at mount). */
 function computeSessionStats() {
-  const placeholder = [
-    { label: 'Avg Confidence', value: '—', sub: 'no sessions yet' },
-    { label: 'Faithfulness',   value: '—', sub: 'no sessions yet' },
-    { label: 'Multi-hop Rate', value: '—', sub: 'no sessions yet' },
-  ]
   try {
     const saved = localStorage.getItem('papermind_chats')
-    if (!saved) return placeholder
+    if (!saved) return null
     const msgs = Object.values(JSON.parse(saved))
       .flat()
       .filter(m => m.role === 'assistant' && m.content?.confidence != null)
-    if (msgs.length === 0) return placeholder
+    if (msgs.length === 0) return null
     const avgConf  = msgs.reduce((s, m) => s + (m.content.confidence || 0), 0) / msgs.length
     const avgFaith = msgs.reduce((s, m) => s + (m.content.faithfulness || 0), 0) / msgs.length
     const multiHop = msgs.filter(m => m.content.plan?.complexity === 'multi_hop').length
     const n = msgs.length
     return [
-      { label: 'Avg Confidence', value: avgConf.toFixed(1) + '%',          sub: `across ${n} quer${n === 1 ? 'y' : 'ies'}` },
-      { label: 'Faithfulness',   value: (avgFaith * 100).toFixed(1) + '%', sub: 'evidence grading' },
-      { label: 'Multi-hop Rate', value: ((multiHop / n) * 100).toFixed(0) + '%', sub: 'of complex queries' },
+      { label: 'avg confidence', value: avgConf.toFixed(1) + '%' },
+      { label: 'faithfulness',   value: (avgFaith * 100).toFixed(1) + '%' },
+      { label: 'multi-hop',      value: ((multiHop / n) * 100).toFixed(0) + '%' },
     ]
   } catch {
-    return placeholder
+    return null
   }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   TOP NAV — replaces the floating pill buttons at the bottom.
+───────────────────────────────────────────────────────────────── */
+function NavLink({ children, onClick, badge }) {
+  return (
+    <button
+      onClick={onClick}
+      className="group relative flex items-center gap-1.5 text-sm text-gray-400 hover:text-white transition-colors duration-200"
+    >
+      {children}
+      {badge != null && badge > 0 && (
+        <span
+          className="text-[10px] font-semibold px-1.5 py-px rounded-full"
+          style={{ background: `${ACCENT}22`, color: ACCENT, fontFamily: 'var(--font-mono)' }}
+        >
+          {badge}
+        </span>
+      )}
+      <span
+        className="absolute -bottom-1 left-0 h-px w-0 group-hover:w-full transition-all duration-300"
+        style={{ background: ACCENT }}
+      />
+    </button>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   PRODUCT PROOF — a static, real-looking cited answer. The actual
+   reason to trust the product, instead of three floating stat cards.
+───────────────────────────────────────────────────────────────── */
+function CitationPreview() {
+  return (
+    <div
+      className="rounded-2xl p-5 w-full"
+      style={{
+        background: 'linear-gradient(160deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012))',
+        border: '1px solid rgba(255,255,255,0.07)',
+        backdropFilter: 'blur(20px)',
+      }}
+    >
+      {/* fake window chrome — signals "this is the product" */}
+      <div className="flex items-center gap-1.5 mb-4">
+        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }} />
+        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }} />
+        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }} />
+        <span className="ml-2 text-[10px] text-gray-600 truncate" style={{ fontFamily: 'var(--font-mono)' }}>
+          attention-is-all-you-need.pdf
+        </span>
+      </div>
+
+      {/* question */}
+      <div className="flex justify-end mb-3">
+        <div className="text-sm text-gray-200 px-3.5 py-2 rounded-2xl rounded-br-md max-w-[80%]"
+          style={{ background: 'rgba(255,255,255,0.06)' }}>
+          What was the main result?
+        </div>
+      </div>
+
+      {/* answer */}
+      <div className="text-sm text-gray-300 leading-relaxed mb-3">
+        The Transformer reached <span className="text-white font-medium">28.4 BLEU</span> on
+        WMT14 EN→DE, improving over the best prior result by more than 2 BLEU
+        <button
+          className="align-super text-[10px] font-semibold px-1.5 py-0.5 rounded-md mx-0.5 transition-colors"
+          style={{ background: `${ACCENT}1a`, color: ACCENT, fontFamily: 'var(--font-mono)' }}
+        >
+          §6.2
+        </button>
+        while training in a fraction of the time.
+      </div>
+
+      {/* evidence footer */}
+      <div className="flex items-center gap-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        <span className="flex items-center gap-1.5 text-[11px] text-gray-500" style={{ fontFamily: 'var(--font-mono)' }}>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: ACCENT, boxShadow: `0 0 6px ${ACCENT}` }} />
+          grounded in source
+        </span>
+        <span className="text-[11px] text-gray-600" style={{ fontFamily: 'var(--font-mono)' }}>
+          confidence 94%
+        </span>
+      </div>
+    </div>
+  )
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -110,372 +211,225 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
   const onDragLeave = () => setDragging(false)
 
   return (
-    <div className="min-h-screen cosmic-bg flex flex-col items-center justify-center px-4 pb-20"
-      style={{ position: 'relative' }}>
-      <CosmicOrbs />
+    <div className="min-h-screen flex flex-col" style={{ background: '#0a0b0e', position: 'relative' }}>
+      <Backdrop />
 
-      {/* Decorative grid overlay */}
-      <div
-        className="fixed inset-0 pointer-events-none"
-        style={{
-          backgroundImage: `
-            linear-gradient(rgba(0,245,255,0.015) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0,245,255,0.015) 1px, transparent 1px)
-          `,
-          backgroundSize: '60px 60px',
-          zIndex: 0,
-        }}
-      />
+      {/* ── TOP NAV ── */}
+      <nav className="relative z-10 flex items-center justify-between px-6 md:px-10 py-5">
+        <div className="flex items-center gap-2.5">
+          <div
+            className="w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: `${ACCENT}1a`, border: `1px solid ${ACCENT}33` }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke={ACCENT} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </div>
+          <span className="text-[15px] font-semibold text-white tracking-tight"
+            style={{ fontFamily: 'var(--font-display)' }}>
+            PaperMind
+          </span>
+        </div>
+
+        <div className="flex items-center gap-6">
+          {onDiscover && <NavLink onClick={onDiscover}>Discover</NavLink>}
+          {onLibrary  && <NavLink onClick={onLibrary} badge={paperCount}>Library</NavLink>}
+          {onRewrite  && <NavLink onClick={onRewrite}>Rewrite</NavLink>}
+        </div>
+      </nav>
 
       {/* ── HERO ── */}
-      <div className="relative z-10 mb-10 text-center">
-        {/* Heading */}
-        <h1
-          className="text-5xl md:text-6xl font-bold mb-4 tracking-tight leading-tight"
-          style={{ fontFamily: 'var(--font-display)' }}
-        >
-          Ask questions.
-          <br />
-          <span
-            className="text-transparent bg-clip-text"
-            style={{
-              backgroundImage: 'linear-gradient(90deg, #22d3ee, #60a5fa, #a78bfa)',
-              WebkitBackgroundClip: 'text',
-            }}
-          >
-            Get answers from the paper.
-          </span>
-        </h1>
+      <div className="relative z-10 flex-1 flex items-center px-6 md:px-10 pb-16">
+        <div className="w-full max-w-6xl mx-auto grid md:grid-cols-2 gap-10 lg:gap-16 items-center">
 
-        {/* Subtitle */}
-        <p className="text-gray-500 text-base max-w-md mx-auto font-light leading-relaxed">
-          Drop any research PDF. Ask anything. Every answer cites the exact section it came from.
-        </p>
-      </div>
-
-      {/* ── STATS ROW — only shown when session history exists ── */}
-      {stats[0].value !== '—' && (
-        <div className="relative z-10 flex gap-4 mb-10 flex-wrap justify-center">
-          {stats.map((s, i) => (
-            <div
-              key={i}
-              className="flex flex-col items-center px-5 py-4 rounded-2xl"
-              style={{
-                background: 'linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))',
-                border: '1px solid rgba(255,255,255,0.06)',
-                backdropFilter: 'blur(16px)',
-                minWidth: 120,
-              }}
-            >
-              <span
-                className="text-2xl font-bold text-white mb-0.5"
-                style={{ fontFamily: 'var(--font-mono)' }}
-              >
-                {s.value}
+          {/* LEFT — copy + dropzone */}
+          <div>
+            {/* eyebrow */}
+            <div className="inline-flex items-center gap-2 mb-6 px-3 py-1 rounded-full"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: ACCENT, boxShadow: `0 0 6px ${ACCENT}` }} />
+              <span className="text-[11px] text-gray-400 tracking-wide" style={{ fontFamily: 'var(--font-mono)' }}>
+                evidence-graded answers
               </span>
-              <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-gray-500 mb-0.5">{s.label}</span>
-              <span className="text-[9px] text-gray-700">{s.sub}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── MAIN ACTION AREA ── */}
-      <div className="relative z-10 w-full max-w-2xl">
-
-        {/* ── DROPZONE ── */}
-        {(phase === 'idle' || phase === 'error') && (
-          <div
-            onClick={() => inputRef.current.click()}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            className="relative overflow-hidden rounded-3xl cursor-pointer transition-all duration-500"
-            style={{
-              background: 'linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))',
-              border: dragging
-                ? '1px solid rgba(0,245,255,0.45)'
-                : '1px solid rgba(255,255,255,0.07)',
-              backdropFilter: 'blur(24px)',
-              boxShadow: dragging
-                ? '0 0 40px rgba(0,245,255,0.15), inset 0 0 40px rgba(0,245,255,0.03)'
-                : 'none',
-              transform: dragging ? 'scale(1.015)' : 'scale(1)',
-            }}
-          >
-            {/* Gradient glow border overlay on hover/drag */}
-            <div
-              className="absolute inset-0 rounded-3xl pointer-events-none transition-opacity duration-500"
-              style={{
-                background: 'linear-gradient(135deg, rgba(0,245,255,0.05), rgba(139,92,246,0.03), rgba(236,72,153,0.02))',
-                opacity: dragging ? 1 : 0,
-              }}
-            />
-
-            {/* Corner accent decorations */}
-            {/* top-left */}
-            <div className="absolute top-4 left-4 pointer-events-none">
-              <div style={{ width: 16, height: 2, background: 'rgba(0,245,255,0.4)', borderRadius: 1 }} />
-              <div style={{ width: 2, height: 14, background: 'rgba(0,245,255,0.4)', borderRadius: 1, marginTop: 0 }} />
-            </div>
-            {/* top-right */}
-            <div className="absolute top-4 right-4 pointer-events-none flex flex-col items-end">
-              <div style={{ width: 16, height: 2, background: 'rgba(0,245,255,0.4)', borderRadius: 1 }} />
-              <div style={{ width: 2, height: 14, background: 'rgba(0,245,255,0.4)', borderRadius: 1 }} />
-            </div>
-            {/* bottom-left */}
-            <div className="absolute bottom-4 left-4 pointer-events-none flex flex-col justify-end">
-              <div style={{ width: 2, height: 14, background: 'rgba(0,245,255,0.4)', borderRadius: 1 }} />
-              <div style={{ width: 16, height: 2, background: 'rgba(0,245,255,0.4)', borderRadius: 1 }} />
-            </div>
-            {/* bottom-right */}
-            <div className="absolute bottom-4 right-4 pointer-events-none flex flex-col items-end justify-end">
-              <div style={{ width: 2, height: 14, background: 'rgba(0,245,255,0.4)', borderRadius: 1 }} />
-              <div style={{ width: 16, height: 2, background: 'rgba(0,245,255,0.4)', borderRadius: 1 }} />
             </div>
 
-            {/* Content */}
-            <div className="p-12 py-16 flex flex-col items-center justify-center">
-              <div
-                className="w-16 h-16 rounded-2xl flex items-center justify-center mb-6"
-                style={{
-                  background: 'linear-gradient(135deg, rgba(0,245,255,0.15), rgba(99,102,241,0.12))',
-                  border: '1px solid rgba(0,245,255,0.2)',
-                  boxShadow: '0 0 24px rgba(0,245,255,0.1)',
-                }}
-              >
-                <svg className="w-8 h-8 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75"
-                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-              </div>
-
-              <h2
-                className="text-2xl font-semibold text-white mb-2"
-                style={{ fontFamily: 'var(--font-display)' }}
-              >
-                {dragging ? 'Release to open' : 'Drop a paper PDF'}
-              </h2>
-              <p className="text-gray-600 text-center font-light mb-8 max-w-xs text-sm">
-                Or click to browse. Any academic PDF works — preprints, published papers, reports.
-              </p>
-
-              <button
-                className="px-6 py-2.5 rounded-full bg-white text-black text-sm font-semibold hover:bg-gray-100 transition-colors shadow-lg shadow-white/10 pointer-events-none"
-              >
-                Select PDF
-              </button>
-            </div>
-
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".pdf"
-              className="hidden"
-              onChange={e => handleFile(e.target.files[0])}
-            />
-          </div>
-        )}
-
-        {/* ── UPLOADING / PROCESSING ── */}
-        {(phase === 'uploading' || phase === 'processing') && (
-          <div
-            className="rounded-3xl p-12 py-14 flex flex-col items-center justify-center"
-            style={{
-              background: 'linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))',
-              border: '1px solid rgba(0,245,255,0.14)',
-              backdropFilter: 'blur(24px)',
-              boxShadow: '0 0 50px rgba(0,245,255,0.06)',
-            }}
-          >
-            {/* Triple-ring spinner */}
-            <div className="relative w-24 h-24 mb-8">
-              {/* Outer ring — cyan */}
-              <div className="absolute inset-0 rounded-full border-2 border-transparent"
-                style={{ borderTopColor: '#00f5ff', animation: 'spin 1.2s linear infinite' }} />
-              {/* Middle ring — violet, reverse */}
-              <div className="absolute inset-2 rounded-full border-2 border-transparent"
-                style={{ borderTopColor: '#a78bfa', animation: 'spin 1.8s linear infinite reverse' }} />
-              {/* Inner gradient circle */}
-              <div
-                className="absolute inset-5 rounded-full flex items-center justify-center animate-pulse"
-                style={{ background: 'linear-gradient(135deg, rgba(0,245,255,0.3), rgba(99,102,241,0.3))' }}
-              >
-                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-                    d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-            </div>
-
-            <h3
-              className="text-xl font-semibold text-white mb-2"
+            <h1
+              className="text-4xl md:text-5xl font-semibold mb-5 tracking-tight leading-[1.08] text-white"
               style={{ fontFamily: 'var(--font-display)' }}
             >
-              {phase === 'uploading' ? 'Uploading…' : 'Processing paper'}
-            </h3>
-            <p className="text-gray-600 text-center font-light mb-8 text-sm">
-              {phase === 'uploading'
-                ? `Sending ${filename}…`
-                : `Parsing, chunking, and indexing ${filename}. Usually done in 30s.`}
+              Ask questions.<br />
+              Get answers you can&nbsp;
+              <span style={{ position: 'relative', whiteSpace: 'nowrap' }}>
+                verify
+                <span style={{
+                  position: 'absolute', left: 0, right: 0, bottom: 2, height: 8,
+                  background: `${ACCENT}55`, borderRadius: 2, zIndex: -1,
+                }} />
+              </span>.
+            </h1>
+
+            <p className="text-gray-400 text-[15px] max-w-md leading-relaxed mb-8">
+              Drop any research PDF and ask anything. Every claim links to the
+              exact section it came from — no invented citations.
             </p>
 
-            {/* Stage indicators */}
-            {phase === 'processing' && (
-              <div className="flex items-center gap-2 mb-7">
-                {['Parse', 'Chunk', 'Embed', 'Index'].map((s, i) => (
-                  <div key={s} className="flex items-center gap-2">
-                    <div className="flex flex-col items-center gap-1">
-                      <div
-                        className="w-2 h-2 rounded-full"
-                        style={{
-                          background: 'rgba(0,245,255,0.7)',
-                          boxShadow: '0 0 6px rgba(0,245,255,0.6)',
-                          animation: `pulse ${1 + i * 0.3}s ease-in-out infinite`,
-                        }}
-                      />
-                      <span className="text-[8px] text-gray-600 uppercase tracking-wider"
-                        style={{ fontFamily: 'var(--font-mono)' }}>{s}</span>
+            {/* ── DROPZONE ── */}
+            {(phase === 'idle' || phase === 'error') && (
+              <>
+                <div
+                  onClick={() => inputRef.current.click()}
+                  onDrop={onDrop}
+                  onDragOver={onDragOver}
+                  onDragLeave={onDragLeave}
+                  className="group relative overflow-hidden rounded-2xl cursor-pointer transition-all duration-300"
+                  style={{
+                    background: dragging ? `${ACCENT}0d` : 'rgba(255,255,255,0.02)',
+                    border: `1px ${dragging ? 'solid' : 'dashed'} ${dragging ? `${ACCENT}88` : 'rgba(255,255,255,0.14)'}`,
+                    boxShadow: dragging ? `0 0 0 4px ${ACCENT}1a` : 'none',
+                  }}
+                >
+                  <div className="px-6 py-8 flex items-center gap-5">
+                    <div
+                      className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors duration-300"
+                      style={{
+                        background: dragging ? `${ACCENT}22` : 'rgba(255,255,255,0.05)',
+                        border: `1px solid ${dragging ? `${ACCENT}55` : 'rgba(255,255,255,0.08)'}`,
+                      }}
+                    >
+                      <svg className="w-6 h-6 transition-colors duration-300"
+                        style={{ color: dragging ? ACCENT : '#9ca3af' }}
+                        fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75"
+                          d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
                     </div>
-                    {i < 3 && (
-                      <div className="w-6 h-px mb-3" style={{ background: 'rgba(0,245,255,0.2)' }} />
-                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[15px] font-medium text-white mb-0.5">
+                        {dragging ? 'Release to upload' : 'Drop a paper PDF'}
+                      </div>
+                      <div className="text-[13px] text-gray-500">
+                        or <span className="text-gray-300 underline underline-offset-2">browse files</span> — preprints, published papers, reports
+                      </div>
+                    </div>
                   </div>
-                ))}
+
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    accept=".pdf"
+                    className="hidden"
+                    onChange={e => handleFile(e.target.files[0])}
+                  />
+                </div>
+
+                {/* ── ERROR ── */}
+                {phase === 'error' && (
+                  <div
+                    className="mt-4 px-4 py-3 rounded-xl flex items-center gap-3"
+                    style={{ background: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.22)' }}
+                  >
+                    <span className="text-red-400 text-sm font-bold flex-shrink-0">!</span>
+                    <p className="text-red-200/80 text-[13px] flex-1">{error}</p>
+                    <button
+                      onClick={() => setPhase('idle')}
+                      className="text-red-400/70 hover:text-red-300 text-xs transition-colors flex-shrink-0"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
+
+                {/* ── session stats — quiet inline row, not big cards ── */}
+                {stats && (
+                  <div className="mt-6 flex items-center gap-5 flex-wrap">
+                    {stats.map((s, i) => (
+                      <div key={i} className="flex items-baseline gap-1.5">
+                        <span className="text-sm font-semibold text-white" style={{ fontFamily: 'var(--font-mono)' }}>
+                          {s.value}
+                        </span>
+                        <span className="text-[11px] text-gray-600">{s.label}</span>
+                        {i < stats.length - 1 && <span className="text-gray-800 ml-3">·</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ── UPLOADING / PROCESSING ── */}
+            {(phase === 'uploading' || phase === 'processing') && (
+              <div
+                className="rounded-2xl px-6 py-7"
+                style={{ background: 'rgba(255,255,255,0.025)', border: `1px solid ${ACCENT}22` }}
+              >
+                <div className="flex items-center gap-4 mb-5">
+                  {/* single refined ring */}
+                  <div className="relative w-10 h-10 flex-shrink-0">
+                    <div className="absolute inset-0 rounded-full border-2"
+                      style={{ borderColor: 'rgba(255,255,255,0.08)' }} />
+                    <div className="absolute inset-0 rounded-full border-2 border-transparent"
+                      style={{ borderTopColor: ACCENT, animation: 'spin 0.9s linear infinite' }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[15px] font-medium text-white">
+                      {phase === 'uploading' ? 'Uploading…' : 'Processing paper'}
+                    </div>
+                    <div className="text-[13px] text-gray-500 truncate">
+                      {phase === 'uploading'
+                        ? `Sending ${filename}`
+                        : `Parsing, chunking & indexing ${filename}`}
+                    </div>
+                  </div>
+                </div>
+
+                {/* stages */}
+                {phase === 'processing' && (
+                  <div className="flex items-center gap-2 mb-5">
+                    {['Parse', 'Chunk', 'Embed', 'Index'].map((s, i) => (
+                      <div key={s} className="flex items-center gap-2 flex-1">
+                        <span className="text-[10px] text-gray-500 uppercase tracking-wider"
+                          style={{ fontFamily: 'var(--font-mono)' }}>{s}</span>
+                        {i < 3 && <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* progress bar */}
+                <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${phase === 'processing' ? 'animate-pulse' : ''}`}
+                    style={{
+                      width: phase === 'uploading' ? `${uploadProgress}%` : '100%',
+                      background: ACCENT,
+                    }}
+                  />
+                </div>
               </div>
             )}
-
-            {/* Progress bar */}
-            <div className="w-full max-w-xs h-0.5 rounded-full overflow-hidden"
-              style={{ background: 'rgba(255,255,255,0.05)' }}>
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${phase === 'processing' ? 'animate-pulse' : ''}`}
-                style={{
-                  width: phase === 'uploading' ? `${uploadProgress}%` : '100%',
-                  background: 'linear-gradient(90deg, #00f5ff, #a78bfa)',
-                  boxShadow: '0 0 8px rgba(0,245,255,0.4)',
-                }}
-              />
-            </div>
           </div>
-        )}
 
-        {/* ── ERROR ── */}
-        {phase === 'error' && (
-          <div
-            className="mt-8 p-5 rounded-2xl flex items-center gap-4"
-            style={{
-              background: 'rgba(248,113,113,0.06)',
-              border: '1px solid rgba(248,113,113,0.2)',
-            }}
-          >
-            <div
-              className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: 'rgba(248,113,113,0.12)' }}
-            >
-              <span
-                className="text-red-400 text-base font-bold"
-                style={{ filter: 'drop-shadow(0 0 4px rgba(248,113,113,0.7))' }}
-              >!</span>
-            </div>
-            <div className="flex-1">
-              <p className="text-red-200/80 text-sm font-medium">{error}</p>
-              <button
-                onClick={() => setPhase('idle')}
-                className="text-red-400/70 hover:text-red-300 text-xs transition-colors mt-1"
-              >
-                Try again
-              </button>
-            </div>
+          {/* RIGHT — product proof */}
+          <div className="hidden md:block">
+            <CitationPreview />
           </div>
-        )}
-      </div>
-
-      {/* ── SECONDARY ACTIONS ── */}
-      {(phase === 'idle' || phase === 'error') && (
-        <div className="relative z-10 mt-5 flex items-center gap-3">
-          <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.04)' }} />
-          <div className="flex items-center gap-2">
-            {onDiscover && (
-              <button
-                onClick={onDiscover}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs transition-all duration-200 hover:text-violet-300"
-                style={{
-                  background: 'rgba(167,139,250,0.05)',
-                  border: '1px solid rgba(167,139,250,0.12)',
-                  color: '#8b5cf6',
-                }}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                Discover Papers
-              </button>
-            )}
-            {onLibrary && (
-              <button
-                onClick={onLibrary}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs transition-all duration-200 hover:text-cyan-300"
-                style={{
-                  background: 'rgba(0,245,255,0.04)',
-                  border: '1px solid rgba(0,245,255,0.10)',
-                  color: '#67e8f9',
-                }}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-                    d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                </svg>
-                My Library
-                {paperCount > 0 && (
-                  <span
-                    className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                    style={{ background: 'rgba(0,245,255,0.15)', color: '#22d3ee' }}
-                  >
-                    {paperCount}
-                  </span>
-                )}
-              </button>
-            )}
-            {onRewrite && (
-              <button
-                onClick={onRewrite}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs transition-all duration-200 hover:text-emerald-300"
-                style={{
-                  background: 'rgba(52,211,153,0.04)',
-                  border: '1px solid rgba(52,211,153,0.12)',
-                  color: '#6ee7b7',
-                }}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-                Rewrite
-              </button>
-            )}
-          </div>
-          <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.04)' }} />
         </div>
-      )}
+      </div>
 
       {/* ── FOOTER ── */}
-      <div className="fixed bottom-0 left-0 right-0 text-center py-4 pointer-events-none z-10">
-        <p
-          className="text-gray-800 text-[10px] uppercase tracking-[0.2em]"
-          style={{ fontFamily: 'var(--font-mono)' }}
-        >
+      <div className="relative z-10 px-6 md:px-10 py-5 flex items-center justify-between"
+        style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+        <span className="text-[11px] text-gray-700" style={{ fontFamily: 'var(--font-mono)' }}>
           PaperMind
-        </p>
+        </span>
+        <span className="text-[11px] text-gray-700">
+          Cites the exact section · evidence-graded · open source
+        </span>
       </div>
 
-      {/* Keyframe for triple-ring spin (injected inline since Tailwind's animate-spin goes one direction) */}
       <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to   { transform: rotate(360deg); }
-        }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
     </div>
   )
