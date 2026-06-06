@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { listPapers, deletePaper, queryPaperStream, comparePapersStream, getGlossary, getRecommendations } from '../api'
+import { listPapers, deletePaper, queryPaperStream, getGlossary, getRecommendations } from '../api'
 import ReactMarkdown from 'react-markdown'
 
 /* ── HELPERS ─────────────────────────────────────────────────────── */
@@ -477,7 +477,7 @@ function EvidenceGrading({ grading }) {
 }
 
 /* ── TELEMETRY PANEL ─────────────────────────────────────────────── */
-function TelemetryPanel({ confidence, attempts, plan, requestId }) {
+function TelemetryPanel({ confidence, requestId }) {
   const stages = useMemo(() => {
     const base = confidence || 50
     const seed = [
@@ -1134,7 +1134,7 @@ function RecsPanel({ paperId, onClose, onImport }) {
 }
 
 /* ── SEARCH BAR ──────────────────────────────────────────────────── */
-function SearchBar({ query, onChange, matchCount, totalCount, onClose }) {
+function SearchBar({ query, onChange, matchCount, onClose }) {
   const inputRef = useRef()
   useEffect(() => { inputRef.current?.focus() }, [])
   const hasQuery = query.trim().length > 0
@@ -1380,7 +1380,7 @@ function NotesPanel({ paperId, paperName, onClose }) {
     setSaved(false)
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
-      try { localStorage.setItem(storageKey, val); setSaved(true) } catch {}
+      try { localStorage.setItem(storageKey, val); setSaved(true) } catch { /* storage unavailable */ }
     }, 600)
   }
 
@@ -1419,7 +1419,7 @@ function NotesPanel({ paperId, paperName, onClose }) {
         </p>
         {notes.trim() && (
           <button
-            onClick={() => { setNotes(''); try { localStorage.removeItem(storageKey) } catch {} setSaved(true) }}
+            onClick={() => { setNotes(''); try { localStorage.removeItem(storageKey) } catch { /* storage unavailable */ } setSaved(true) }}
             className="text-[9px] text-gray-700 hover:text-red-400/70 transition-colors uppercase tracking-wider font-bold"
             style={{ fontFamily: 'var(--font-mono)' }}>
             Clear
@@ -1512,7 +1512,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
   const bottomRef    = useRef()
   const textareaRef  = useRef()
 
-  const messages = allMessages[paper.paper_id] || []
+  const messages = useMemo(() => allMessages[paper.paper_id] || [], [allMessages, paper.paper_id])
 
   const getMessageText = (msg) => {
     if (msg.role === 'user') return typeof msg.content === 'string' ? msg.content : ''
@@ -1536,13 +1536,13 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       }
     })
     return messages.filter((_, i) => included.has(i))
-  }, [messages, searchQuery]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [messages, searchQuery])
 
   const matchCount = useMemo(() => {
     if (!searchQuery.trim()) return 0
     const q = searchQuery.toLowerCase()
     return messages.filter(m => getMessageText(m).toLowerCase().includes(q)).length
-  }, [messages, searchQuery]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [messages, searchQuery])
 
   const showToast = useCallback((message, type = 'info') => {
     const id = ++toastCounter.current
@@ -1559,7 +1559,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
 
   // Persist chat history across page refreshes
   useEffect(() => {
-    try { localStorage.setItem('papermind_chats', JSON.stringify(allMessages)) } catch {}
+    try { localStorage.setItem('papermind_chats', JSON.stringify(allMessages)) } catch { /* storage full or unavailable */ }
   }, [allMessages])
 
   // Sync browser tab title to active paper
@@ -1610,7 +1610,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [showSearch])
 
   const handleExportFlashcards = useCallback(() => {
     const msgs = allMessages[paper.paper_id] || []
@@ -1780,7 +1780,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
     if (cmd === 'export-pdf') handleExportPDF()
     if (cmd === 'clear')     setAllMessages(prev => {
       const next = { ...prev, [paper.paper_id]: [] }
-      try { localStorage.setItem('papermind_chats', JSON.stringify(next)) } catch {}
+      try { localStorage.setItem('papermind_chats', JSON.stringify(next)) } catch { /* storage full or unavailable */ }
       return next
     })
     if (cmd === 'workspace') setShowSwitcher(true)
