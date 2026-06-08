@@ -1,6 +1,15 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { listPapers, deletePaper, queryPaperStream, getGlossary, getRecommendations } from '../api'
 import ReactMarkdown from 'react-markdown'
+import { Document, Page, pdfjs } from 'react-pdf'
+import 'react-pdf/dist/Page/TextLayer.css'
+import 'react-pdf/dist/Page/AnnotationLayer.css'
+
+// pdf.js worker — Vite resolves this to a hashed asset URL at build time.
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString()
 
 /* ── HELPERS ─────────────────────────────────────────────────────── */
 function escapeHtml(str) {
@@ -199,8 +208,32 @@ function SparkLine({ scores }) {
 }
 
 /* ── PDF PREVIEW PANEL ───────────────────────────────────────────── */
-function PDFPreviewPanel({ pdfUrl, title, page, onClose }) {
-  const panelRef = useRef()
+// Collapse whitespace + lowercase so PDF text-layer fragments can be matched
+// against the cited evidence chunk regardless of line-wrapping differences.
+function normalizeForMatch(s) {
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+function PDFPreviewPanel({ pdfUrl, title, page, highlight, onClose }) {
+  const panelRef  = useRef()
+  const scrollRef = useRef()
+
+  // The Document loader wants a clean URL; the `#page=` hash is only useful
+  // for the native "open in new tab" fallback.
+  const fileUrl = useMemo(() => (pdfUrl || '').split('#')[0], [pdfUrl])
+
+  const initialPage = useMemo(() => {
+    const p = parseInt(page, 10)
+    return Number.isFinite(p) && p > 0 ? p : 1
+  }, [page])
+
+  const [numPages,   setNumPages]   = useState(null)
+  const [pageNumber, setPageNumber] = useState(initialPage)
+  const [width,      setWidth]      = useState(0)
+  const [loadError,  setLoadError]  = useState(false)
+
+  // Evidence text to highlight, normalized once.
+  const needle = useMemo(() => normalizeForMatch(highlight), [highlight])
 
   // Close on Escape
   useEffect(() => {
@@ -209,10 +242,57 @@ function PDFPreviewPanel({ pdfUrl, title, page, onClose }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // Track the scroll container's width so the page renders to fit.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const update = () => setWidth(Math.max(0, el.clientWidth - 32))
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   // Close on backdrop click (not panel click)
   const handleBackdrop = e => {
     if (e.target === e.currentTarget) onClose()
   }
+
+  // Wrap text-layer fragments that belong to the cited chunk in <mark>.
+  // The chunk was extracted from this same PDF, so its line fragments are
+  // substrings of the evidence text — matching them reproduces the span.
+  const textRenderer = useCallback((item) => {
+    const str = item?.str || ''
+    const safe = escapeHtml(str)
+    if (!needle) return safe
+    const frag = normalizeForMatch(str)
+    if (frag.length >= 5 && needle.includes(frag)) {
+      return `<mark class="pm-pdf-mark">${safe}</mark>`
+    }
+    return safe
+  }, [needle])
+
+  // After the text layer renders, scroll the first highlight into view.
+  const handleTextLayer = useCallback(() => {
+    const root = scrollRef.current
+    if (!root) return
+    const first = root.querySelector('.pm-pdf-mark')
+    if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [])
+
+  const goPrev = () => setPageNumber(n => Math.max(1, n - 1))
+  const goNext = () => setPageNumber(n => Math.min(numPages || n, n + 1))
+
+  const tabUrl = `${fileUrl}#page=${pageNumber}`
+
+  const navBtnStyle = (disabled) => ({
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 22, height: 22, borderRadius: 5, flexShrink: 0,
+    color: disabled ? 'rgba(156,163,175,0.2)' : 'rgba(156,163,175,0.6)',
+    border: '1px solid rgba(255,255,255,0.06)',
+    background: 'transparent',
+    cursor: disabled ? 'default' : 'pointer',
+  })
 
   return (
     <div
@@ -225,6 +305,14 @@ function PDFPreviewPanel({ pdfUrl, title, page, onClose }) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
+      <style>{`
+        .pm-pdf-mark {
+          background: rgba(0,245,255,0.38);
+          color: transparent;
+          border-radius: 2px;
+          box-shadow: 0 0 0 1px rgba(0,245,255,0.3);
+        }
+      `}</style>
       <div
         ref={panelRef}
         style={{
@@ -259,16 +347,28 @@ function PDFPreviewPanel({ pdfUrl, title, page, onClose }) {
           }}>
             {title}
           </span>
-          <span style={{
-            fontSize: 10, fontFamily: 'var(--font-mono)',
-            color: 'rgba(156,163,175,0.4)',
-            marginRight: 8,
-          }}>
-            p.{page}
-          </span>
+          {/* Page navigation */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 4 }}>
+            <button onClick={goPrev} disabled={pageNumber <= 1} title="Previous page" style={navBtnStyle(pageNumber <= 1)}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+            <span style={{
+              fontSize: 10, fontFamily: 'var(--font-mono)',
+              color: 'rgba(156,163,175,0.55)', minWidth: 48, textAlign: 'center',
+            }}>
+              p.{pageNumber}{numPages ? ` / ${numPages}` : ''}
+            </span>
+            <button onClick={goNext} disabled={!!numPages && pageNumber >= numPages} title="Next page" style={navBtnStyle(!!numPages && pageNumber >= numPages)}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          </div>
           {/* Open in tab button */}
           <a
-            href={pdfUrl} target="_blank" rel="noopener noreferrer"
+            href={tabUrl} target="_blank" rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
             title="Open in new tab"
             style={{
@@ -310,12 +410,45 @@ function PDFPreviewPanel({ pdfUrl, title, page, onClose }) {
           </button>
         </div>
 
-        {/* PDF iframe */}
-        <iframe
-          src={pdfUrl}
-          title={title}
-          style={{ flex: 1, border: 'none', width: '100%', background: '#fff' }}
-        />
+        {/* PDF render surface */}
+        <div
+          ref={scrollRef}
+          style={{
+            flex: 1, overflow: 'auto', padding: 16,
+            display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
+            background: 'rgba(0,0,0,0.35)',
+          }}
+        >
+          {loadError ? (
+            <div style={{
+              margin: 'auto', textAlign: 'center', maxWidth: 320,
+              color: 'rgba(156,163,175,0.7)', fontSize: 13, lineHeight: 1.6,
+            }}>
+              Couldn't render the PDF inline.{' '}
+              <a href={tabUrl} target="_blank" rel="noopener noreferrer"
+                style={{ color: 'rgba(0,245,255,0.8)' }}>
+                Open it in a new tab
+              </a>.
+            </div>
+          ) : (
+            <Document
+              file={fileUrl}
+              onLoadSuccess={({ numPages }) => setNumPages(numPages)}
+              onLoadError={() => setLoadError(true)}
+              loading={<div style={{ margin: 'auto', color: 'rgba(156,163,175,0.6)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>Loading PDF…</div>}
+              error={<div style={{ margin: 'auto', color: 'rgba(248,113,113,0.7)', fontSize: 12 }}>Failed to load PDF.</div>}
+            >
+              <Page
+                pageNumber={pageNumber}
+                width={width || undefined}
+                customTextRenderer={textRenderer}
+                onRenderTextLayerSuccess={handleTextLayer}
+                renderAnnotationLayer={false}
+                loading={<div style={{ margin: 'auto', color: 'rgba(156,163,175,0.6)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>Rendering page…</div>}
+              />
+            </Document>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -385,6 +518,7 @@ function SourceChip({ source, paperId }) {
       pdfUrl={pdfUrl}
       title={`${isTable ? 'TABLE · ' : ''}${source.section}`}
       page={source.page}
+      highlight={source.text}
       onClose={() => setShowPreview(false)}
     />
   )
@@ -477,25 +611,29 @@ function EvidenceGrading({ grading }) {
 }
 
 /* ── TELEMETRY PANEL ─────────────────────────────────────────────── */
-function TelemetryPanel({ confidence, requestId }) {
-  const stages = useMemo(() => {
-    const base = confidence || 50
-    const seed = [
-      { name: 'Query Planning',   ms: Math.round(40  + (base * 0.4)) },
-      { name: 'Retrieval',        ms: Math.round(120 + (base * 1.2)) },
-      { name: 'Reranking',        ms: Math.round(30  + (base * 0.3)) },
-      { name: 'Generation',       ms: Math.round(600 + (base * 4.5)) },
-      { name: 'Evidence Grading', ms: Math.round(80  + (base * 0.5)) },
-      { name: 'Evaluation',       ms: Math.round(50  + (base * 0.6)) },
-    ]
-    const total = seed.reduce((s, x) => s + x.ms, 0)
-    return { stages: seed, total }
-  }, [confidence])
+// Renders the real per-stage timings captured during the query (msg.content.trace).
+// Older/persisted answers and error replies have no trace — we say so rather
+// than invent numbers.
+function TelemetryPanel({ trace, requestId }) {
+  const reqId = requestId ? requestId.toUpperCase() : '—'
 
-  const reqId = requestId
-    ? requestId.toUpperCase()
-    : 'REQ-' + String(Math.round((confidence || 50) * 1234567.89)).padStart(8, '0')
-  const maxMs = Math.max(...stages.stages.map(s => s.ms))
+  if (!trace?.stages?.length) {
+    return (
+      <div className="bg-black/40 border border-white/[0.04] rounded-2xl px-5 py-4 mt-3 animate-slide-down"
+        style={{ fontFamily: 'var(--font-mono)' }}>
+        <div className="flex items-center justify-between">
+          <span className="text-[9px] uppercase tracking-[0.2em] text-gray-600 font-bold">Trace</span>
+          <span className="text-[9px] text-gray-700">{reqId}</span>
+        </div>
+        <p className="text-[10px] text-gray-700 mt-3 leading-relaxed">
+          Stage timings weren't captured for this answer.
+        </p>
+      </div>
+    )
+  }
+
+  const { stages, total } = trace
+  const maxMs = Math.max(1, ...stages.map(s => s.ms))
 
   return (
     <div className="bg-black/40 border border-white/[0.04] rounded-2xl px-5 py-4 mt-3 animate-slide-down"
@@ -504,11 +642,11 @@ function TelemetryPanel({ confidence, requestId }) {
         <span className="text-[9px] uppercase tracking-[0.2em] text-gray-600 font-bold">Trace</span>
         <div className="flex items-center gap-3">
           <span className="text-[9px] text-gray-700">{reqId}</span>
-          <span className="text-[9px] text-cyan-500/60">{stages.total} ms total</span>
+          <span className="text-[9px] text-cyan-500/60">{total} ms total</span>
         </div>
       </div>
       <div className="space-y-2.5">
-        {stages.stages.map((s, i) => (
+        {stages.map((s, i) => (
           <div key={i} className="flex items-center gap-3">
             <span className="text-[9px] text-gray-600 w-28 flex-shrink-0">{s.name}</span>
             <div className="flex-1 h-1 bg-white/[0.04] rounded-full overflow-hidden">
@@ -529,36 +667,82 @@ function TelemetryPanel({ confidence, requestId }) {
 }
 
 /* ── GRADED ANSWER — typewriter + sentence tinting ───────────────── */
-function GradedAnswer({ text, grades, animate }) {
-  const hasRun  = useRef(false)
-  const [displayed, setDisplayed] = useState(() => animate ? '' : text)
-  const [done,      setDone]      = useState(!animate)
+function tintStyle(g) {
+  return {
+    color: g.grade === 'DIRECT' ? 'rgba(229,231,235,1)' : 'rgba(156,163,175,0.85)',
+    fontStyle: g.grade === 'INFERRED' ? 'italic' : 'normal',
+  }
+}
+
+function GradedAnswer({ text, grades, animate, onDone }) {
+  const keptGrades = useMemo(
+    () => grades?.filter(g => g.kept && g.chunk_ref !== 'header') || [],
+    [grades],
+  )
+  const tinted = keptGrades.length >= 3
+
+  // Type over the EXACT text that will be rendered when done. When tinting is
+  // active that's the joined graded sentences (not the raw `text`/essence) —
+  // matching them means no jarring swap-and-jump ("BAM") at the end.
+  const fullText = useMemo(
+    () => (tinted ? keptGrades.map(g => g.sentence).join(' ') : (text || '')),
+    [tinted, keptGrades, text],
+  )
+  const fullLen = fullText.length
+
+  // Precompute each graded sentence's start offset within `fullText` so the
+  // reveal cursor can clip them live. Done functionally (prefix sums) to avoid
+  // any in-render variable reassignment.
+  const segMeta = useMemo(() => {
+    const segs = keptGrades.map((g, i) => g.sentence + (i < keptGrades.length - 1 ? ' ' : ''))
+    return segs.map((seg, i) => ({
+      seg,
+      start: segs.slice(0, i).reduce((n, s) => n + s.length, 0),
+      grade: keptGrades[i].grade,
+    }))
+  }, [keptGrades])
+
+  // `revealed` = how many characters are currently shown. Driven purely off
+  // `fullText`/`animate` (no run-once ref) so React StrictMode's double effect
+  // invocation in dev can't strand a half-cleared animation — each effect run
+  // owns its interval and cleans it up. setState happens only inside the
+  // interval callback, never synchronously in the effect body.
+  const [revealed, setRevealed] = useState(() => (animate && fullText ? 0 : fullLen))
 
   useEffect(() => {
-    if (!animate || hasRun.current || !text) { setDone(true); setDisplayed(text); return }
-    hasRun.current = true
-    let i = 0
-    const step = Math.max(2, Math.floor(text.length / 90))
+    if (!animate || !fullText) return
+
+    // Reveal word-by-word for an LLM-like cadence: collect the end offset of
+    // each whitespace-delimited token, then walk them on a fixed tick.
+    const stops = []
+    const re = /\S+\s*/g
+    let m
+    while ((m = re.exec(fullText)) !== null) stops.push(m.index + m[0].length)
+    if (stops.length === 0) return
+
+    // Reveal more words per tick for long answers so total time stays bounded
+    // (~110 ticks ≈ 2.5s) while short answers still reveal one word at a time.
+    const perTick = Math.max(1, Math.ceil(stops.length / 110))
+    let k = 0
     const id = setInterval(() => {
-      i = Math.min(i + step, text.length)
-      setDisplayed(text.slice(0, i))
-      if (i >= text.length) { clearInterval(id); setDone(true); setDisplayed(text) }
-    }, 16)
+      k = Math.min(k + perTick, stops.length)
+      setRevealed(k >= stops.length ? fullText.length : stops[k])
+      if (k >= stops.length) clearInterval(id)
+    }, 22)
     return () => clearInterval(id)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fullText, animate])
 
-  if (!done) {
-    return (
-      <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">
-        {displayed}
-        <span className="animate-pulse" style={{ color: '#00f5ff', marginLeft: 1 }}>▋</span>
-      </div>
-    )
-  }
+  // When this stops being the newest message mid-animation, snap to full text.
+  const done = !animate || revealed >= fullLen
 
-  // Sentence-level tinting when grades are rich enough
-  const keptGrades = grades?.filter(g => g.kept && g.chunk_ref !== 'header') || []
-  if (keptGrades.length >= 3) {
+  // Tell the parent the text has finished so it can sequence the rest of the
+  // card (scores → sources → quality → follow-up). Fire exactly once.
+  const fired = useRef(false)
+  useEffect(() => {
+    if (done && !fired.current) { fired.current = true; onDone?.() }
+  }, [done, onDone])
+
+  if (tinted) {
     const hasInferred = keptGrades.some(g => g.grade === 'INFERRED')
     return (
       <div className="text-sm leading-relaxed">
@@ -568,15 +752,27 @@ function GradedAnswer({ text, grades, animate }) {
             <span style={{ color: 'rgba(156,163,175,0.7)', fontStyle: 'italic' }}>● Inferred</span>
           </div>
         )}
-        {keptGrades.map((g, i) => (
-          <span key={i} style={{
-            color: g.grade === 'DIRECT' ? 'rgba(229,231,235,1)' : 'rgba(156,163,175,0.85)',
-            fontStyle: g.grade === 'INFERRED' ? 'italic' : 'normal',
-          }}
-            title={g.grade === 'INFERRED' ? 'Inferred — supported by context' : 'Directly evidenced'}>
-            {g.sentence}{' '}
-          </span>
-        ))}
+        {/* Clip each graded sentence to the reveal cursor so tinting types in live. */}
+        {segMeta.map((s, i) => {
+          const shown = done ? s.seg : (revealed <= s.start ? '' : s.seg.slice(0, revealed - s.start))
+          if (!shown) return null
+          return (
+            <span key={i} style={tintStyle(s)}
+              title={s.grade === 'INFERRED' ? 'Inferred — supported by context' : 'Directly evidenced'}>
+              {shown}
+            </span>
+          )
+        })}
+        {!done && <span className="animate-pulse" style={{ color: '#00f5ff', marginLeft: 1 }}>▋</span>}
+      </div>
+    )
+  }
+
+  if (!done) {
+    return (
+      <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">
+        {fullText.slice(0, revealed)}
+        <span className="animate-pulse" style={{ color: '#00f5ff', marginLeft: 1 }}>▋</span>
       </div>
     )
   }
@@ -584,6 +780,21 @@ function GradedAnswer({ text, grades, animate }) {
   return (
     <div className="text-gray-200 text-sm leading-relaxed markdown-content">
       <ReactMarkdown>{text}</ReactMarkdown>
+    </div>
+  )
+}
+
+/* ── REVEAL — opacity/slide-up wrapper for staged section choreography ─ */
+function Reveal({ show, children, className, style }) {
+  return (
+    <div className={className} style={{
+      ...style,
+      opacity: show ? 1 : 0,
+      transform: show ? 'none' : 'translateY(10px)',
+      transition: 'opacity 0.45s ease, transform 0.45s ease',
+      pointerEvents: show ? 'auto' : 'none',
+    }}>
+      {children}
     </div>
   )
 }
@@ -678,11 +889,71 @@ const PIPELINE_STAGES = [
   { key: 'verifying',  label: 'Verifying claims'     },
 ]
 
+// Beyond this, a single stage has stalled long enough to reassure the user
+// it's still working (LLM fallbacks can hold a stage for 20–40s).
+const STAGE_SLOW_MS = 8000
+
+// Turn the captured progress stream into real per-stage durations for the
+// Trace panel. A stage's span is the gap from its first event to the next
+// stage's first event; the final stage runs until the answer arrives (endT).
+function buildTrace(progressLog, endT) {
+  if (!progressLog?.length) return null
+  const firstT = {}
+  const order  = []
+  for (const p of progressLog) {
+    if (p.t == null) continue
+    if (firstT[p.stage] === undefined) { firstT[p.stage] = p.t; order.push(p.stage) }
+  }
+  if (!order.length) return null
+  const labelFor = k => PIPELINE_STAGES.find(s => s.key === k)?.label || k
+  const stages = order.map((stage, i) => {
+    const start = firstT[stage]
+    const next  = i + 1 < order.length ? firstT[order[i + 1]] : endT
+    return { name: labelFor(stage), ms: Math.max(0, Math.round(next - start)) }
+  })
+  return { stages, total: Math.max(0, Math.round(endT - firstT[order[0]])) }
+}
+
+function fmtDuration(ms) {
+  if (ms == null || ms < 0) return ''
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
 function PipelineStepper({ progress }) {
+  // Live clock so the active stage and total elapsed visibly tick up — without
+  // this a slow provider holding a stage makes the whole panel look frozen.
+  const [now, setNow] = useState(() => performance.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(performance.now()), 200)
+    return () => clearInterval(id)
+  }, [])
+
   const seenStages  = new Set(progress.map(p => p.stage))
   const latestStage = progress[progress.length - 1]?.stage
   const latestMsg   = progress[progress.length - 1]?.message
   const retryEvent  = [...progress].reverse().find(p => p.stage === 'retrying')
+
+  // First arrival time of each stage, so a stage's span is the gap to the next.
+  const firstT = {}
+  for (const p of progress) {
+    if (p.t != null && firstT[p.stage] === undefined) firstT[p.stage] = p.t
+  }
+  const startT  = progress.find(p => p.t != null)?.t
+  const elapsed = startT != null ? now - startT : null
+  const startedStages = PIPELINE_STAGES.filter(s => firstT[s.key] !== undefined)
+
+  const stageDuration = (key) => {
+    const s = firstT[key]
+    if (s == null) return null
+    const idx  = startedStages.findIndex(x => x.key === key)
+    const next = startedStages[idx + 1]
+    const end  = next ? firstT[next.key] : (key === latestStage ? now : s)
+    return end - s
+  }
+
+  const activeDur    = latestStage ? stageDuration(latestStage) : null
+  const showSlowHint = activeDur != null && activeDur > STAGE_SLOW_MS
 
   return (
     <div className="flex justify-start mb-8">
@@ -692,6 +963,8 @@ function PipelineStepper({ progress }) {
             const isDone    = seenStages.has(stage.key) && latestStage !== stage.key
             const isActive  = latestStage === stage.key
             const isPending = !seenStages.has(stage.key) && !isActive
+            const dur       = stageDuration(stage.key)
+            const isSlow    = isActive && dur != null && dur > STAGE_SLOW_MS
 
             return (
               <div key={stage.key} className="flex items-center gap-3">
@@ -718,6 +991,12 @@ function PipelineStepper({ progress }) {
                     <span className="text-gray-600 ml-2 text-[10px]">— {latestMsg}</span>
                   )}
                 </span>
+                {dur != null && (isDone || isActive) && (
+                  <span className={`ml-auto text-[9px] tabular-nums ${isSlow ? 'text-amber-400/70' : 'text-gray-700'}`}
+                    style={{ fontFamily: 'var(--font-mono)' }}>
+                    {fmtDuration(dur)}
+                  </span>
+                )}
               </div>
             )
           })}
@@ -733,6 +1012,19 @@ function PipelineStepper({ progress }) {
             </div>
           )}
         </div>
+
+        {elapsed != null && (
+          <div className="mt-4 pt-3 flex items-center justify-between gap-3"
+            style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+            <span className="text-[9px] text-amber-400/60" style={{ fontFamily: 'var(--font-mono)' }}>
+              {showSlowHint ? 'still working — a provider is taking its time…' : ''}
+            </span>
+            <span className="text-[9px] text-cyan-500/50 tabular-nums whitespace-nowrap"
+              style={{ fontFamily: 'var(--font-mono)' }}>
+              {fmtDuration(elapsed)} elapsed
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -760,8 +1052,25 @@ function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory, highlight }
   const [showTrace,  setShowTrace]  = useState(false)
   const [copied,     setCopied]     = useState(false)
 
+  // Staged reveal after the answer types out: 1 = scores, 2 = sources,
+  // 3 = evidence quality, 4 = follow-up + footer. Non-newest (history)
+  // messages jump straight to the end so they render fully on mount.
+  const [stage, setStage] = useState(isNewest ? 0 : 99)
+  const handleTextDone = useCallback(() => setStage(s => Math.max(s, 1)), [])
+  useEffect(() => {
+    if (stage < 1 || stage >= 4) return
+    const id = setTimeout(() => setStage(s => Math.min(s + 1, 4)), 240)
+    return () => clearTimeout(id)
+  }, [stage])
+
   const handleCopy = () => {
-    navigator.clipboard.writeText(msg.content?.answer || '').then(() => {
+    // Copy what's on screen — strip the ESSENCE/DETAIL scaffolding markers
+    // (same transform the Markdown/PDF exports use) so pasted text is clean.
+    const clean = (msg.content?.answer || '')
+      .replace(/\*{0,2}ESSENCE:?\*{0,2}\s*/gi, '')
+      .replace(/\*{0,2}DETAIL:?\*{0,2}\s*/gi, '\n\n')
+      .trim()
+    navigator.clipboard.writeText(clean).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
@@ -781,7 +1090,7 @@ function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory, highlight }
   }
 
   const { answer, confidence, faithfulness, answer_relevancy, sources, attempts,
-    warning, grading, plan, is_comparison, reasoning_chain, request_id } = msg.content
+    warning, grading, plan, is_comparison, reasoning_chain, request_id, trace } = msg.content
 
   // Strip any leaked scratchpad content that appears before the ESSENCE marker
   const parseAnswer = (text) => {
@@ -846,15 +1155,20 @@ function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory, highlight }
               text={essence}
               grades={grading?.grades}
               animate={isNewest}
+              onDone={handleTextDone}
             />
           </div>
 
           {/* Reasoning chain toggle */}
-          {reasoning_chain && <ReasoningChain chain={reasoning_chain} />}
+          {reasoning_chain && (
+            <Reveal show={stage >= 1}>
+              <ReasoningChain chain={reasoning_chain} />
+            </Reveal>
+          )}
 
           {/* Detail accordion */}
           {detail && (
-            <div className="mt-6">
+            <Reveal show={stage >= 1} className="mt-6">
               <button onClick={() => setIsExpanded(!isExpanded)}
                 className="flex items-center gap-2 mb-1 group/btn">
                 <div className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
@@ -883,32 +1197,36 @@ function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory, highlight }
                   </div>
                 </div>
               </div>
-            </div>
+            </Reveal>
           )}
 
           {/* Metrics row */}
-          <div className="flex items-center gap-5 mt-8 pt-6 border-t border-white/[0.04]">
+          <Reveal show={stage >= 1} className="flex items-center gap-5 mt-8 pt-6 border-t border-white/[0.04]">
             <MetricRing label="Confidence"  value={confidence}          isPercentage={true} accent="cyan"   />
             <MetricRing label="Faithfulness" value={faithfulness || 0}                      accent="violet" />
             <MetricRing label="Relevancy"   value={answer_relevancy || 0}                   accent="blue"   />
             <SparkLine scores={scoreHistory} />
-          </div>
+          </Reveal>
 
           {/* Sources */}
           {sources?.length > 0 && (
-            <div className="mt-6 pt-5 border-t border-white/[0.04]">
+            <Reveal show={stage >= 2} className="mt-6 pt-5 border-t border-white/[0.04]">
               <p className="text-[10px] uppercase tracking-[0.2em] text-gray-600 mb-3 font-semibold">Evidence Sources</p>
               <div className="flex flex-wrap gap-2">
                 {sources.map((s, i) => <SourceChip key={i} source={s} paperId={paperId} />)}
               </div>
-            </div>
+            </Reveal>
           )}
 
           {/* Evidence grading */}
-          <EvidenceGrading grading={grading} />
+          <Reveal show={stage >= 3}>
+            <EvidenceGrading grading={grading} />
+          </Reveal>
 
           {/* Follow-up chips */}
-          <FollowUpChips plan={plan} isComparison={is_comparison} onSelect={onFollowUp} />
+          <Reveal show={stage >= 4}>
+            <FollowUpChips plan={plan} isComparison={is_comparison} onSelect={onFollowUp} />
+          </Reveal>
 
           {/* Footer */}
           <div className="flex items-center justify-between mt-5 pt-4 border-t border-white/[0.03]">
@@ -956,7 +1274,7 @@ function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory, highlight }
           </div>
         </div>
 
-        {showTrace && <TelemetryPanel confidence={confidence} attempts={attempts} plan={plan} requestId={request_id} />}
+        {showTrace && <TelemetryPanel trace={trace} requestId={request_id} />}
 
         {warning && (
           <div className="mt-3 rounded-2xl px-5 py-3 text-[11px] leading-relaxed backdrop-blur-md"
@@ -1831,10 +2149,10 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       try {
         const [resultA, resultB] = await Promise.all([
           queryPaperStream(paperId, question, ({ type, data }) => {
-            if (type === 'progress') setCompareProgress(p => ({ ...p, a: [...p.a, { stage: data.stage, message: data.message }] }))
+            if (type === 'progress') setCompareProgress(p => ({ ...p, a: [...p.a, { stage: data.stage, message: data.message, t: performance.now() }] }))
           }),
           queryPaperStream(comparePaper2.paper_id, question, ({ type, data }) => {
-            if (type === 'progress') setCompareProgress(p => ({ ...p, b: [...p.b, { stage: data.stage, message: data.message }] }))
+            if (type === 'progress') setCompareProgress(p => ({ ...p, b: [...p.b, { stage: data.stage, message: data.message, t: performance.now() }] }))
           }),
         ])
         setAllMessages(prev => ({
@@ -1859,14 +2177,23 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
 
     // ── Single-paper query ──
     setProgress([])
+    // Keep a local copy of the progress events (the `progress` state closure is
+    // stale inside this async handler) so we can compute real stage timings for
+    // the Trace panel once the answer lands.
+    const progressLog = []
     const onEvent = ({ type, data }) => {
-      if (type === 'progress') setProgress(prev => [...prev, { stage: data.stage, message: data.message }])
+      if (type === 'progress') {
+        const evt = { stage: data.stage, message: data.message, t: performance.now() }
+        progressLog.push(evt)
+        setProgress(prev => [...prev, evt])
+      }
     }
     try {
       const result = await queryPaperStream(paperId, question, onEvent)
+      const trace = buildTrace(progressLog, performance.now())
       setAllMessages(prev => ({
         ...prev,
-        [paperId]: [...(prev[paperId] || []), { role: 'assistant', content: result }],
+        [paperId]: [...(prev[paperId] || []), { role: 'assistant', content: trace ? { ...result, trace } : result }],
       }))
     } catch (err) {
       showToast(err?.message || 'Query failed — please try again', 'error')
