@@ -29,6 +29,7 @@ from api.storage import (
     delete_pdf,
     delete_paper_record,
 )
+from api.usage import enforce_paper_quota, enforce_query_quota, get_usage_summary, record_usage
 from api.logger import generate_request_id, log_query
 from ingestion.bm25_retriever  import invalidate_bm25_cache
 from discovery.router import router as discovery_router
@@ -60,7 +61,7 @@ def health_check():
 async def upload_paper(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(enforce_paper_quota),
 ):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
@@ -94,6 +95,11 @@ def get_status(paper_id: str, user_id: str = Depends(get_current_user_id)):
 @app.get("/papers")
 def get_all_papers(user_id: str = Depends(get_current_user_id)):
     return list_papers(user_id)
+
+
+@app.get("/usage")
+def get_usage(user_id: str = Depends(get_current_user_id)):
+    return get_usage_summary(user_id)
 
 
 @app.delete("/papers/{paper_id}")
@@ -279,7 +285,7 @@ class QueryRequest(BaseModel):
 
 
 @app.post("/query")
-async def query_paper(request: QueryRequest, user_id: str = Depends(get_current_user_id)):
+async def query_paper(request: QueryRequest, user_id: str = Depends(enforce_query_quota)):
     req_id = generate_request_id()
     loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
@@ -314,6 +320,16 @@ async def query_paper(request: QueryRequest, user_id: str = Depends(get_current_
             passed=result.get("passed", False),
             llm_calls=result.get("llm_calls", 0),
             providers=result.get("providers_used", []),
+        )
+        record_usage(
+            user_id=user_id,
+            kind="query",
+            req_id=req_id,
+            paper_id=f"{paper_id_a[:4]}+{paper_id_b[:4]}",
+            llm_calls=result.get("llm_calls", 0),
+            tokens_in=result.get("tokens_in", 0),
+            tokens_out=result.get("tokens_out", 0),
+            cost_usd=result.get("cost_usd", 0.0),
         )
         result["request_id"] = req_id
         return result
@@ -351,6 +367,16 @@ async def query_paper(request: QueryRequest, user_id: str = Depends(get_current_
         passed=result.get("passed", False),
         llm_calls=result.get("llm_calls", 0),
         providers=result.get("providers_used", []),
+    )
+    record_usage(
+        user_id=user_id,
+        kind="query",
+        req_id=req_id,
+        paper_id=paper_id,
+        llm_calls=result.get("llm_calls", 0),
+        tokens_in=result.get("tokens_in", 0),
+        tokens_out=result.get("tokens_out", 0),
+        cost_usd=result.get("cost_usd", 0.0),
     )
     result["request_id"] = req_id
     return result
@@ -392,7 +418,7 @@ def _make_progress_pusher(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop)
 
 
 @app.post("/query/stream")
-async def query_stream(request: QueryRequest, user_id: str = Depends(get_current_user_id)):
+async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_query_quota)):
     req_id = generate_request_id()
     loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
@@ -495,6 +521,16 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(get_current
                     passed=result.get("passed", False),
                     llm_calls=result.get("llm_calls", 0),
                     providers=result.get("providers_used", []),
+                )
+                record_usage(
+                    user_id=user_id,
+                    kind="query",
+                    req_id=req_id,
+                    paper_id=log_paper_id,
+                    llm_calls=result.get("llm_calls", 0),
+                    tokens_in=result.get("tokens_in", 0),
+                    tokens_out=result.get("tokens_out", 0),
+                    cost_usd=result.get("cost_usd", 0.0),
                 )
                 yield _sse_format("done", result)
                 return

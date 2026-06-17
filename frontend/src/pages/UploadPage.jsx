@@ -194,9 +194,9 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
           setError('Lost connection while processing.')
         }
       }, 2000)
-    } catch {
+    } catch (err) {
       setPhase('error')
-      setError('Upload failed. Is the server running?')
+      setError(err.message || 'Upload failed. Is the server running?')
     }
   }, [onPaperReady])
 

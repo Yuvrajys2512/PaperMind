@@ -30,10 +30,10 @@ The provider chain (Groq → Gemini → Mistral → Cerebras) currently runs ent
 
 To do:
 
-- [ ] **Paid API keys** for at least the primary provider.
-- [ ] **Per-request cost tracking** — tokens in/out, logged per user per query. A multi-hop query with planning + generation + sentence-by-sentence evidence grading + faithfulness eval is *many* LLM calls. **Measure what one query actually costs before pricing anything.**
-- [ ] **Per-user quotas enforced in middleware** — e.g. free = 3 papers + 20 queries/month. This is the same machinery the paid tier needs.
-- [ ] Consider **disabling the expensive stages on the free tier** (evidence grading, retry engine) and making "full verified answers" the paid hook.
+- [ ] **Paid API keys** for at least the primary provider. *(Manual action, not code — every provider key in `ingestion/llm_client.py` is read purely from env vars, so upgrading billing on Groq/Gemini/etc. needs zero code changes whenever it happens.)*
+- [x] **Per-request cost tracking** — tokens in/out, logged per user per query. A multi-hop query with planning + generation + sentence-by-sentence evidence grading + faithfulness eval is *many* LLM calls. **Measure what one query actually costs before pricing anything.** *(`ingestion/llm_client.py` now captures `usage.prompt_tokens`/`completion_tokens` per call and prices them against a public-list-price table; `api/usage.py`'s `usage_events` table logs tokens/cost per user for both queries and paper uploads, via `record_usage()` called from `api/main.py` and `api/ingestion_runner.py`. `GET /usage` surfaces the running totals.)*
+- [x] **Per-user quotas enforced in middleware** — e.g. free = 3 papers + 20 queries/month. This is the same machinery the paid tier needs. *(Implemented as FastAPI dependencies — `enforce_paper_quota`/`enforce_query_quota` in `api/usage.py`, matching the existing `get_current_user_id` dependency pattern rather than ASGI middleware. Limits are env-configurable (`PAPERMIND_FREE_MAX_PAPERS`, `PAPERMIND_FREE_MAX_QUERIES_PER_MONTH`); a `users.tier` column exists for §3/Stripe to flip later.)*
+- [ ] Consider **disabling the expensive stages on the free tier** (evidence grading, retry engine) and making "full verified answers" the paid hook. *(Deferred — there's no paid tier yet to contrast against, so the trade-off isn't meaningful until §3 lands and real usage data exists.)*
 
 ---
 

@@ -35,21 +35,53 @@ load_dotenv()
 # Per-thread call stats. FastAPI runs sync pipeline work in a thread-pool
 # executor, so thread-local isolates one request's stats from another's.
 # The pipeline calls reset_stats() at the start of a query and get_stats()
-# at the end to surface llm_calls / providers_used on the response.
+# at the end to surface llm_calls / providers_used / cost on the response.
 _stats_local = threading.local()
 
 
 def reset_stats() -> None:
     """Zero the per-thread LLM call counter. Call at the start of a request."""
-    _stats_local.stats = {"call_count": 0, "providers": []}
+    _stats_local.stats = {
+        "call_count": 0, "providers": [],
+        "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0,
+    }
 
 
 def get_stats() -> dict:
     """Read per-thread LLM call stats accumulated since the last reset."""
     s = getattr(_stats_local, "stats", None)
     if s is None:
-        return {"call_count": 0, "providers": []}
-    return {"call_count": s["call_count"], "providers": list(s["providers"])}
+        return {
+            "call_count": 0, "providers": [],
+            "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0,
+        }
+    return {
+        "call_count":  s["call_count"],
+        "providers":   list(s["providers"]),
+        "tokens_in":   s["tokens_in"],
+        "tokens_out":  s["tokens_out"],
+        "cost_usd":    s["cost_usd"],
+    }
+
+
+# Public list price per 1M tokens, USD (verified Jun 2026 — see provider pricing
+# pages). The keys we run on today are free-tier, so this is purely a cost
+# *projection*: "what would this have cost on paid keys" — exactly what's needed
+# before pricing a freemium tier. Unpriced (provider, model) pairs cost $0
+# rather than crashing, so a newly added model just under-counts until priced.
+_PRICING: dict[tuple[str, str], tuple[float, float]] = {
+    ("Groq-1",   "llama-3.3-70b-versatile"): (0.59, 0.79),
+    ("Groq-2",   "llama-3.3-70b-versatile"): (0.59, 0.79),
+    ("Gemini",   "gemini-2.5-flash-lite"):   (0.10, 0.40),
+    ("Mistral",  "mistral-small-latest"):    (0.20, 0.60),
+    ("Cerebras", "gpt-oss-120b"):            (0.35, 0.75),
+}
+
+
+def _cost(provider_name: str, model: str, tokens_in: int, tokens_out: int) -> float:
+    """USD cost of one call, or 0.0 if the (provider, model) pair isn't priced."""
+    price_in, price_out = _PRICING.get((provider_name, model), (0.0, 0.0))
+    return (tokens_in * price_in + tokens_out * price_out) / 1_000_000
 
 
 _PROVIDERS: list[dict] = []
@@ -228,10 +260,16 @@ def chat_completion(
                     continue
                 text = content.strip()
                 print(f"[llm_client] Used: {provider['name']}")
+                usage = getattr(response, "usage", None)
+                tokens_in  = getattr(usage, "prompt_tokens", 0) or 0
+                tokens_out = getattr(usage, "completion_tokens", 0) or 0
                 s = getattr(_stats_local, "stats", None)
                 if s is not None:
                     s["call_count"] += 1
                     s["providers"].append(provider["name"])
+                    s["tokens_in"]  += tokens_in
+                    s["tokens_out"] += tokens_out
+                    s["cost_usd"]   += _cost(provider["name"], provider["model"], tokens_in, tokens_out)
                 return text
 
             except Exception as e:

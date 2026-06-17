@@ -16,7 +16,10 @@ export async function uploadPaper(file) {
     headers: await authHeaders(),
     body: form,
   })
-  if (!res.ok) throw new Error('Upload failed')
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || 'Upload failed')
+  }
   return res.json()
 }
 
@@ -32,7 +35,10 @@ export async function queryPaper(paperId, question) {
     headers: { 'Content-Type': 'application/json', ...await authHeaders() },
     body: JSON.stringify({ paper_id: paperId, question })
   })
-  if (!res.ok) throw new Error('Query failed')
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || 'Query failed')
+  }
   return res.json()
 }
 
@@ -54,7 +60,10 @@ export async function comparePapers(paperIdA, paperIdB, question) {
     headers: { 'Content-Type': 'application/json', ...await authHeaders() },
     body: JSON.stringify({ paper_ids: [paperIdA, paperIdB], question })
   })
-  if (!res.ok) throw new Error('Compare failed')
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || 'Compare failed')
+  }
   return res.json()
 }
 
@@ -69,7 +78,8 @@ async function streamQuery(body, onEvent) {
     body: JSON.stringify(body),
   })
   if (!res.ok || !res.body) {
-    throw new Error(`Stream failed: HTTP ${res.status}`)
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Stream failed: HTTP ${res.status}`)
   }
 
   const reader  = res.body.getReader()

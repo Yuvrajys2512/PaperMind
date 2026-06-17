@@ -1,8 +1,12 @@
-# PaperMind — Multi-Tenancy Build Log (Launch Checklist §1)
+# PaperMind — Build Log (Launch Checklist §1–§2)
 
-This is a narrative record of how PaperMind went from a single-user demo to a properly multi-tenant app — what we built, in what order, why each decision was made, and how we verified it actually worked. It covers exactly the work behind the three checked boxes in `LAUNCH_CHECKLIST.md` §1. Read this top to bottom and you should understand the whole thing without having to reconstruct it from diffs.
+This is a narrative record of how PaperMind went from a single-user demo toward a real product — what we built, in what order, why each decision was made, and how we verified it actually worked. It covers the work behind every checked box in `LAUNCH_CHECKLIST.md` §1 (multi-tenancy) and §2 (LLM economics) so far. Read this top to bottom and you should understand the whole thing without having to reconstruct it from diffs.
+
+**Part 1 (§1 — multi-tenancy)** covers auth, per-user data scoping, and the move to real persistent storage. **Part 2 (§2 — LLM economics)** picks up from there: per-request cost tracking and per-user quotas.
 
 ---
+
+# Part 1 — Multi-Tenancy (§1)
 
 ## 1. The problem we were solving
 
@@ -115,7 +119,7 @@ Because both entry points (direct upload and discovery-import) needed the exact 
 
 ---
 
-## 5. Tech stack — summary
+## 5. Tech stack — summary (§1)
 
 | Concern | Tool | Why this one |
 |---|---|---|
@@ -142,8 +146,86 @@ For each of the three layers, the process was the same shape, deliberately:
 
 ---
 
-## 7. What's done, what isn't
+# Part 2 — LLM Economics (§2)
 
-**Done and verified** (§1 of `LAUNCH_CHECKLIST.md`, in full): auth, per-user scoping, Postgres + R2 storage. A real upload → background ingest → question-answer → PDF-preview cycle has been run end-to-end against the live Clerk, Neon, and R2 services, with no errors in the backend log.
+## 7. The problem, and the scope decisions
 
-**Not started**: §2 (LLM economics — paid keys, per-request cost tracking, per-user quotas), §3 (Stripe billing), §4 (deployment hardening — most of the mechanics are already written up in `DEPLOYMENT.md`), §5 (Sentry/PostHog, landing page, ToS/Privacy Policy).
+§2 of the checklist has four open items: paid API keys, per-request cost tracking, per-user quotas, and (optionally) disabling expensive pipeline stages on the free tier. The provider chain (`ingestion/llm_client.py`, Groq → Gemini → Mistral → Cerebras) was already running entirely on personal free-tier keys, with no visibility into what a query actually costs and no limit on how many a single user could run.
+
+Three scoping decisions were made explicitly before writing any code, rather than assumed:
+
+- **Paid API keys is not a code task.** Every provider key is already read purely from `os.getenv(...)` in `llm_client.py` — upgrading to a paid plan on Groq/Gemini/etc. is something only the account owner can do (it needs real billing credentials), and it needs zero code changes whenever it happens. Left as a manual to-do.
+- **Stage-gating (disabling evidence grading/retry for free users) was deferred.** The checklist itself hedges this with "Consider..." — and there's no paid tier yet (§3/Stripe isn't built) to make that trade-off meaningful. Building it now would mean degrading the product for *every* current user with no upgrade path to offer them. Revisit once §3 exists and there's real usage data.
+- **Cost tracking and quotas were built now**, using the checklist's own suggested numbers (3 papers + 20 queries/month) as the default, made tunable via environment variables rather than hardcoded — because the checklist explicitly says these limits should be set from *measured* usage, not guessed, and that measurement only starts once tracking exists.
+
+---
+
+## 8. Cost tracking — what it actually required
+
+The provider chain already had a thread-local stats mechanism (`reset_stats()` / `get_stats()` in `llm_client.py`) tracking call count and which provider answered — reset at the start of each query in `ingestion/pipeline.py`, read at the end to attach `llm_calls`/`providers_used` to the response. It just discarded the one field that mattered for cost: every OpenAI-compatible response includes a `usage` object with `prompt_tokens`/`completion_tokens`, and the code never looked at it.
+
+**What changed:**
+- Added a `_PRICING` table to `llm_client.py`, keyed by `(provider, model)`, with current public list prices **looked up live** (not recalled from training data, since these change): Groq `llama-3.3-70b-versatile` $0.59/$0.79 per 1M tokens (in/out), Gemini `gemini-2.5-flash-lite` $0.10/$0.40, Mistral `mistral-small-latest` $0.20/$0.60, Cerebras `gpt-oss-120b` $0.35/$0.75.
+- Important framing: PaperMind's keys are still free-tier today. This table doesn't bill anyone — it answers "what would this have cost on paid keys," which is precisely the number the checklist says to gather *before* setting any price.
+- Extended the existing thread-local stats dict with `tokens_in`/`tokens_out`/`cost_usd`, populated right where `call_count` was already being incremented in `chat_completion()` — reusing the mechanism already in place rather than building a second one alongside it. An unpriced `(provider, model)` pair costs `$0` instead of raising, so adding a new model later just under-counts until it's priced, rather than crashing live traffic.
+- A question the checklist doesn't address came up during planning: **uploading a paper also burns real LLM calls** (section/structure detection during ingestion, in `ingestion/section_detector.py` and friends) — not just answering questions. This was flagged explicitly rather than silently expanding scope, and the answer was yes, track it too: `api/ingestion_runner.py` now calls `reset_stats()` before ingesting and logs a `kind="upload"` usage event afterward, attributed to the paper's owning `user_id` (already on the row — no signature changes needed to thread it through).
+- New module `api/usage.py` owns a `usage_events` table (one row per query or upload: tokens, cost, call count, timestamp) and a minimal `users` table (just a `tier` column, defaulting to `'free'`) — the latter exists now specifically so §3's eventual Stripe webhook has a column to flip, instead of needing its own schema migration when that day comes.
+- A `GET /usage` endpoint surfaces the running totals (tier, papers used/limit, queries used/limit this month) for the current user. Not explicitly requested, but cheap given the data was already being tracked, and a natural complement to quotas.
+
+---
+
+## 9. Per-user quotas — what it actually required
+
+The checklist says "enforced in middleware." We implemented it as FastAPI `Depends()` dependencies instead of ASGI-level middleware, because that's the pattern already used for auth in this exact codebase (`get_current_user_id`) — middleware has no clean way to know who the authenticated user is without re-implementing JWT verification at a different layer. `enforce_paper_quota` and `enforce_query_quota` (`api/usage.py`) each take over the same dependency slot the relevant endpoints already used: `/upload` now depends on `enforce_paper_quota`, `/query` and `/query/stream` on `enforce_query_quota` — swapping an existing wiring pattern rather than adding a new one.
+
+Design choices worth keeping in mind:
+- **Limits**: free = 3 papers + 20 queries/month, read from `PAPERMIND_FREE_MAX_PAPERS` / `PAPERMIND_FREE_MAX_QUERIES_PER_MONTH` so they can be retuned from real usage data without a deploy.
+- **Fail-open on unknown tiers.** A tier with no entry in `TIER_LIMITS` (e.g. a future `"pro"` tier that Stripe has already assigned to a `users` row before the code defining its limits has shipped) is treated as *unlimited*, not blocked. That ordering race is real once §3 exists, and the failure mode of "a paying customer gets locked out" is much worse than "a brand-new tier briefly has no cap."
+- **Paper count reuses `list_papers()`** — the exact same count already rendered on the Library page — rather than inventing a second definition of "how many papers does this user have."
+- Off-topic / pre-LLM-guard query rejections still count against the monthly query quota (the user asked a question; that consumes one of their 20 "asks," even if it cost $0 in tokens) — kept this simple rather than special-casing it.
+
+---
+
+## 10. A gap caught before this shipped
+
+The first implementation pass only touched the backend. Checking `frontend/src/api.js` against it surfaced a real problem: `uploadPaper`, `queryPaper`, and `comparePapers` all discarded the backend's actual error body and threw a hardcoded generic message — `Error('Upload failed')`, `Error('Query failed')` — on *any* non-OK response. A 429 with a specific "you've used all 3 of your free papers" message would have rendered to the user as a meaningless, indistinguishable failure. Two other functions already in the same file (`rewriteText`, `importPaper`) had the correct pattern — parse the JSON body, throw `err.detail` if present. That pattern was applied to the other three call sites plus the SSE `streamQuery` path.
+
+One more layer of the same bug existed in `frontend/src/pages/UploadPage.jsx`: its catch block didn't even bind the caught error (`catch { setError('Upload failed. Is the server running?') }`), so fixing `api.js` alone wouldn't have been enough — the real message would have been thrown away a second time, on the way into `setError`. Fixed to `catch (err) { setError(err.message || '...') }`.
+
+This is the kind of gap that's easy to miss because the backend behaves correctly in isolation (curl/Postman would show the real `detail` field) — it only shows up once you trace the exact path a real error takes through the actual frontend code that's already there.
+
+---
+
+## 11. Verification
+
+- Confirmed `api/usage.py`'s `_ensure_schema()` creates `users` and `usage_events` on the real Neon database with no errors, by importing the module directly.
+- Exercised `get_user_tier`, `record_usage`, `count_queries_this_month`, and `get_usage_summary` end-to-end against a throwaway test user ID — then deleted those rows immediately afterward so no synthetic data was left sitting in the production database.
+- Made one real (free-tier) call through `chat_completion` and checked the cost by hand rather than trusting the output blindly: 38 input tokens and 3 output tokens against Groq's $0.59 / $0.79 per-million pricing comes out to exactly **$0.0000248** — and that's exactly what the code reported, confirming the formula is wired correctly end to end, not just "returning a number that looks plausible."
+- Ran the frontend's ESLint and a full production `vite build` after the `api.js` / `UploadPage.jsx` changes — both clean, no new warnings.
+
+---
+
+## 12. Tech stack / files — summary (§2)
+
+| Concern | Tool / mechanism | Why |
+|---|---|---|
+| Token + cost capture | `response.usage` (OpenAI-compatible field, already present, previously discarded) | No new dependency — every provider already returns this |
+| Cost pricing | Hardcoded `_PRICING` table in `llm_client.py`, sourced from live provider pricing pages | Keys are free-tier; this projects paid-tier cost for pricing decisions later |
+| Usage + tier storage | New tables on the existing Neon Postgres (`users`, `usage_events`) | Reuses the connection pool and DB already in place from §1 — no new infra |
+| Quota enforcement | FastAPI `Depends()` dependencies (`enforce_paper_quota`, `enforce_query_quota`) | Matches the existing auth dependency pattern, not new ASGI middleware |
+
+New file: `api/usage.py`. Modified: `ingestion/llm_client.py` (token/cost capture), `ingestion/pipeline.py` (surfaces `tokens_in`/`tokens_out`/`cost_usd` on every result), `api/main.py` (quota dependencies wired onto `/upload`, `/query`, `/query/stream`; new `GET /usage`), `api/ingestion_runner.py` (upload-time cost logging), `frontend/src/api.js` and `frontend/src/pages/UploadPage.jsx` (real error messages reach the user).
+
+New environment variables (optional, both have defaults): `PAPERMIND_FREE_MAX_PAPERS` (default `3`), `PAPERMIND_FREE_MAX_QUERIES_PER_MONTH` (default `20`).
+
+---
+
+## 13. What's done, what isn't
+
+**§1 — done and verified** (multi-tenancy, in full): auth, per-user scoping, Postgres + R2 storage. A real upload → background ingest → question-answer → PDF-preview cycle has been run end-to-end against the live Clerk, Neon, and R2 services, with no errors in the backend log.
+
+**§2 — partially done:**
+- Done and verified: per-request cost tracking (queries *and* uploads) and per-user quotas (3 papers / 20 queries/month, env-configurable), including a `GET /usage` endpoint and legible error messages on the frontend when a limit is hit.
+- Not done: **paid API keys** (manual action for whoever owns the provider accounts — no code blocker) and **disabling expensive stages on the free tier** (deliberately deferred — there's no paid tier yet to contrast against, and the checklist itself only says "consider").
+
+**Not started**: §3 (Stripe billing), §4 (deployment hardening — most of the mechanics are already written up in `DEPLOYMENT.md`), §5 (Sentry/PostHog, landing page, ToS/Privacy Policy).

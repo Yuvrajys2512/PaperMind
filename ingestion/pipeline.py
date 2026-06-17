@@ -102,6 +102,9 @@ def answer_query(query: str, paper_name: str, request_id: str = None, on_progres
             "plan":             {},
             "llm_calls":        get_stats()["call_count"],
             "providers_used":   get_stats()["providers"],
+            "tokens_in":        get_stats()["tokens_in"],
+            "tokens_out":       get_stats()["tokens_out"],
+            "cost_usd":         get_stats()["cost_usd"],
             "duration_ms":      duration_ms,
         }
 
@@ -306,6 +309,9 @@ def answer_query(query: str, paper_name: str, request_id: str = None, on_progres
     best_result["duration_ms"]    = round((time.monotonic() - t_start) * 1000)
     best_result["llm_calls"]      = stats["call_count"]
     best_result["providers_used"] = stats["providers"]
+    best_result["tokens_in"]      = stats["tokens_in"]
+    best_result["tokens_out"]     = stats["tokens_out"]
+    best_result["cost_usd"]       = stats["cost_usd"]
 
     return best_result
 
@@ -420,6 +426,9 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str, on_progress=Non
             "duration_ms":    round((time.monotonic() - t_start) * 1000),
             "llm_calls":      stats["call_count"],
             "providers_used": stats["providers"],
+            "tokens_in":      stats["tokens_in"],
+            "tokens_out":     stats["tokens_out"],
+            "cost_usd":       stats["cost_usd"],
         }
 
     except Exception as e:
@@ -447,4 +456,7 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str, on_progress=Non
             "duration_ms":      round((time.monotonic() - t_start) * 1000),
             "llm_calls":        stats["call_count"],
             "providers_used":   stats["providers"],
+            "tokens_in":        stats["tokens_in"],
+            "tokens_out":       stats["tokens_out"],
+            "cost_usd":         stats["cost_usd"],
         }
