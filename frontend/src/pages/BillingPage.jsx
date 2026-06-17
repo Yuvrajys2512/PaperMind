@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getUsage, startCheckout, openBillingPortal } from '../api'
+import { track } from '../analytics'
 
 const ACCENT = '#22d3ee'
 
@@ -32,6 +33,7 @@ export default function BillingPage({ onBack }) {
   const [redirecting, setRedirecting] = useState(false)
 
   useEffect(() => {
+    track('plan_viewed')
     getUsage().then(setUsage).catch(e => setError(e.message || 'Failed to load plan'))
   }, [])
 
@@ -40,6 +42,7 @@ export default function BillingPage({ onBack }) {
   const handleAction = useCallback(async () => {
     setError('')
     setRedirecting(true)
+    if (!isPro) track('upgrade_clicked')
     try {
       const { url } = isPro ? await openBillingPortal() : await startCheckout()
       window.location.href = url // hand off to Stripe-hosted page

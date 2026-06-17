@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { SignedIn, SignedOut, SignIn, UserButton } from '@clerk/clerk-react'
+import { SignedIn, SignedOut, SignIn, UserButton, useUser } from '@clerk/clerk-react'
+import { identify, resetAnalytics } from './analytics'
 import UploadPage from './pages/UploadPage'
 import ChatPage from './pages/ChatPage'
 import DiscoverPage from './pages/DiscoverPage'
@@ -66,15 +67,33 @@ function AppPages() {
   )
 }
 
+// Tie PostHog events to the signed-in user (pseudonymous — Clerk ID only).
+function PostHogIdentify() {
+  const { user, isLoaded } = useUser()
+  useEffect(() => {
+    if (isLoaded && user) identify(user.id)
+  }, [isLoaded, user])
+  return null
+}
+
+// Clear the PostHog identity when signed out, so events aren't attributed to a
+// previous user on a shared device.
+function PostHogReset() {
+  useEffect(() => { resetAnalytics() }, [])
+  return null
+}
+
 export default function App() {
   return (
     <>
       <SignedOut>
+        <PostHogReset />
         <div className="min-h-screen flex items-center justify-center">
           <SignIn />
         </div>
       </SignedOut>
       <SignedIn>
+        <PostHogIdentify />
         <div className="fixed top-4 right-4 z-50">
           <UserButton />
         </div>

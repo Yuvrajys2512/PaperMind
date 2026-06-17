@@ -1,4 +1,4 @@
-# PaperMind — Build Log (Launch Checklist §1–§4)
+# PaperMind — Build Log (Launch Checklist §1–§5)
 
 This is a narrative record of how PaperMind went from a single-user demo toward a real product — what we built, in what order, why each decision was made, and how we verified it actually worked. It covers the work behind every checked box in `LAUNCH_CHECKLIST.md` §1 (multi-tenancy) and §2 (LLM economics) so far. Read this top to bottom and you should understand the whole thing without having to reconstruct it from diffs.
 
@@ -232,7 +232,7 @@ New environment variables (optional, both have defaults): `PAPERMIND_FREE_MAX_PA
 
 **§4 (deployment & hardening)**: code-complete and mechanically verified — see Part 4 below. The live deploy (HF Space + Vercel + domain) is manual.
 
-**Not started**: §5 (Sentry/PostHog, landing page, ToS/Privacy Policy).
+**§5 (product & legal minimum)**: in progress — observability (Sentry + PostHog) done, see Part 5. Remaining: preloaded sample papers, landing page, ToS/Privacy Policy.
 
 ---
 
@@ -372,3 +372,29 @@ The previous `DEPLOYMENT.md` carried a Dockerfile that would have **shipped brok
 New files: `api/uploads.py`, `Dockerfile`, `.dockerignore`. Modified: `api/main.py` (CORS env, slowapi, startup regeneration, upload validation, delete dedup), `api/storage.py` (`list_ready_paper_ids`), `api/ingestion_runner.py` (`regenerate_missing_collections` + `kind` arg), `ingestion/retriever.py` (`collection_name`/`collection_exists`), `discovery/fetcher.py` (download validation), `frontend/src/api.js` (configurable base), `requirements.txt` (`slowapi`), and a rewritten `product/DEPLOYMENT.md`. New env vars: `ALLOWED_ORIGINS`, `PAPERMIND_MAX_UPLOAD_MB`, `PAPERMIND_REGENERATE_ON_STARTUP`, plus the frontend's `VITE_API_URL`.
 
 ---
+
+# Part 5 — Product & Legal Minimum (§5)
+
+## 30. Observability — Sentry + PostHog (done)
+
+§5's first slice is "can't run a product blind." Two services, one principle.
+
+**The principle: fail-open, not fail-loud.** Auth/storage/billing (§1–§3) deliberately *raise* on missing config — you can't run the product without them. Observability is the opposite: it must be a complete **no-op when its keys are absent**, so local dev and CI run untouched. Every init here is guarded by the presence of its env var.
+
+**Sentry (errors), both sides:**
+- Backend (`api/main.py`): `sentry_sdk.init(...)` only when `SENTRY_DSN` is set, placed before the `FastAPI()` instance so the SDK's automatic FastAPI/Starlette integration wraps the app — unhandled route exceptions are captured with zero per-route code. `send_default_pii=False`, `traces_sample_rate=0.1`.
+- Frontend (`frontend/src/main.jsx`): `Sentry.init(...)` only when `VITE_SENTRY_DSN` is set, and `<App/>` wrapped in a `<Sentry.ErrorBoundary>` with a minimal fallback.
+
+**PostHog (product analytics), frontend-only** — by decision, since §2 already records server-truth (cost/tokens/quota) in Postgres, so a second server-side analytics path would just duplicate it:
+- New `frontend/src/analytics.js` is a thin wrapper: `initAnalytics()` inits the `posthog-js` singleton only when `VITE_POSTHOG_KEY` is set, and `track`/`identify`/`resetAnalytics` are no-ops otherwise. Centralizing the guard keeps every call site a clean one-liner.
+- `App.jsx` identifies the signed-in user pseudonymously by **Clerk ID only** (a `<PostHogIdentify/>` using `useUser()`), and `<PostHogReset/>` clears identity on sign-out so events aren't misattributed on a shared device.
+- Four funnel events at existing handlers: `paper_uploaded` (UploadPage), `query_asked` (ChatPage, with a `compare` flag), `plan_viewed` + `upgrade_clicked` (BillingPage). Enough to analyze the upload→query→upgrade conversion from day one without over-instrumenting.
+
+**Verification:** backend imports clean with no DSN (`is_initialized()` → False) and initializes without raising when a dummy DSN is set; frontend `eslint` + `vite build` pass with **no** analytics keys present, which is itself the proof that the guarded no-op path holds. Confirming events actually land in the Sentry/PostHog dashboards needs real keys and is a deploy-time step.
+
+**Manual (yours, at deploy):** create a Sentry project (→ `SENTRY_DSN` on the HF Space + `VITE_SENTRY_DSN` on Vercel) and a PostHog project (→ `VITE_POSTHOG_KEY` + optional `VITE_POSTHOG_HOST` on Vercel; `frontend/.env.local` to test locally).
+
+New files: `frontend/src/analytics.js`. Modified: `api/main.py` (guarded Sentry init), `requirements.txt` (`sentry-sdk[fastapi]`), `frontend/src/main.jsx` (Sentry + analytics init + ErrorBoundary), `frontend/src/App.jsx` (identify/reset), `frontend/src/pages/{UploadPage,ChatPage,BillingPage}.jsx` (funnel events), `frontend/package.json` (`@sentry/react`, `posthog-js`). New env vars: `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, and frontend `VITE_SENTRY_DSN`/`VITE_POSTHOG_KEY`/`VITE_POSTHOG_HOST`.
+
+## 31. Still to come in §5
+Preloaded sample papers (30-second first-value), a landing page with a demo GIF, and Terms of Service + Privacy Policy (upload-rights responsibility on the user).

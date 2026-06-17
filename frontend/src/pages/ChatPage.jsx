@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useAuth } from '@clerk/clerk-react'
 import { listPapers, deletePaper, queryPaperStream, getGlossary, getRecommendations } from '../api'
+import { track } from '../analytics'
 import ReactMarkdown from 'react-markdown'
 import { Document, Page, pdfjs } from 'react-pdf'
 import 'react-pdf/dist/Page/TextLayer.css'
@@ -2178,6 +2179,7 @@ export default function ChatPage({ paper: initialPaper, onBack }) {
       [paperId]: [...(prev[paperId] || []), { role: 'user', content: raw }],
     }))
     setLoading(true)
+    track('query_asked', { compare: !!(compareMode && comparePaper2) })
 
     // ── Side-by-side compare: two parallel streams ──
     if (compareMode && comparePaper2) {

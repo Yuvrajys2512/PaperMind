@@ -46,3 +46,6 @@ boto3>=1.35
 
 # Billing — Stripe Checkout, customer portal, subscription webhooks
 stripe>=11
+
+# Error tracking (optional — no-op unless SENTRY_DSN is set)
+sentry-sdk[fastapi]>=2.0

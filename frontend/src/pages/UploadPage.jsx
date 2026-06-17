@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { uploadPaper, getPaperStatus, listPapers } from '../api'
+import { track } from '../analytics'
 
 /* Single restrained accent for the whole page. */
 const ACCENT = '#22d3ee'
@@ -175,6 +176,7 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
 
     try {
       const { paper_id } = await uploadPaper(file)
+      track('paper_uploaded')
       setUploadProgress(100)
       setTimeout(() => { setPhase('processing') }, 500)
 

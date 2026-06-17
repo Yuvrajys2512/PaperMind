@@ -65,7 +65,7 @@ To do:
 
 ## 5. Product & legal minimum
 
-- [ ] **Sentry** (error tracking) and **PostHog** (analytics) — both free tier, ~an hour each. Can't run a product blind.
+- [x] **Sentry** (error tracking) and **PostHog** (analytics) — both free tier. *(Sentry on backend (`api/main.py`, guarded by `SENTRY_DSN`) + frontend (`main.jsx` + `ErrorBoundary`). PostHog frontend-only via `frontend/src/analytics.js` — autocapture + identify by Clerk ID + funnel events `paper_uploaded`/`query_asked`/`plan_viewed`/`upgrade_clicked`. All **fail-open**: no-op without keys. Code-complete + verified; creating the Sentry/PostHog projects and adding the DSN/key env vars is the manual deploy-time step.)*
 - [ ] **Landing page** with a demo GIF.
 - [ ] **Preloaded sample papers** so a new user gets value in 30 seconds without uploading anything.
 - [ ] **Terms of Service + Privacy Policy** — users upload PDFs that are often copyrighted; the ToS must put upload-rights responsibility on the user.

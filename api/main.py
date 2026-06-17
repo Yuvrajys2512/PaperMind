@@ -43,6 +43,21 @@ from api.billing import router as billing_router
 from discovery.router import router as discovery_router
 from discovery.search  import search_papers
 
+# Error tracking. Guarded by SENTRY_DSN so it's a complete no-op when unset —
+# observability is optional and must never break local dev or CI (unlike auth/
+# storage/billing, which fail loud). sentry-sdk auto-instruments FastAPI when
+# initialized early, so unhandled route exceptions are captured automatically.
+import sentry_sdk
+
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "development"),
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
+
 # CORS: a comma-separated allow-list, locked down from the old "*". Defaults to
 # the Vite dev origin; set ALLOWED_ORIGINS to the real domain(s) in production.
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
