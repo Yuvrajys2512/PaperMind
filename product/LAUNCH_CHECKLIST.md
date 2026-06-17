@@ -50,14 +50,16 @@ To do:
 
 ## 4. Deployment & hardening
 
-(DEPLOYMENT.md covers most of the mechanics.)
+(DEPLOYMENT.md rewritten for the post-§1–§3 architecture + the free HF Spaces + Vercel + custom-domain path.)
 
-- [ ] Dockerize the backend; host on Render / Railway / Fly with ≥2 GB RAM.
-- [ ] Frontend on Vercel / Cloudflare Pages; buy a domain.
-- [ ] **Lock down CORS** from `"*"` to the real frontend origin (already flagged in DEPLOYMENT.md).
-- [ ] **Upload validation** — max file size, PDF-only enforcement *server-side*, per-IP rate limiting on unauthenticated routes. An open `/upload` endpoint is an invitation to fill the disk.
-- [ ] **Pre-download the embedding/reranker models into the Docker image** so cold starts don't take 30s.
-- [ ] Move ingestion to a proper background queue *eventually* — in-process background tasks are fine at launch.
+- [x] **Dockerize the backend.** *(Root `Dockerfile` + `.dockerignore`: `python:3.12-slim`, copies `api`/`ingestion`/`discovery`, single worker, binds `${PORT:-7860}`. Target is **HF Spaces free (16 GB RAM)** — Render's free 512 MB can't run torch; Render/Fly remain the paid always-on option.)*
+- [ ] **Frontend on Vercel; buy a domain.** *(Code is ready — `VITE_API_URL` makes the API base configurable. Actual Vercel project + domain purchase are manual deploy-time steps; see DEPLOYMENT.md Parts 5–7.)*
+- [x] **Lock down CORS** from `"*"` to the real frontend origin. *(Env-driven `ALLOWED_ORIGINS` in `api/main.py`, default `localhost:5173`.)*
+- [x] **Upload validation** — max file size + server-side PDF magic-byte enforcement + per-IP rate limiting. *(`api/uploads.py` + chunked validating copy in `/upload` and `discovery/fetcher.py`; `slowapi` global 120/min in `api/main.py`. Note: nearly every route is now Clerk-gated + §2-quota-bounded, so the unauthenticated surface is just `/health` + `/billing/webhook`.)*
+- [x] **Pre-download the embedding/reranker models into the Docker image.** *(Dockerfile bakes `BAAI/bge-small-en-v1.5` + `cross-encoder/ms-marco-MiniLM-L-6-v2` — the models actually loaded; the old guide named the wrong one.)*
+- [ ] Move ingestion to a proper background queue *eventually* — in-process background tasks are fine at launch. *(Deferred by design.)*
+
+> **New for the free-tier path:** ChromaDB now **regenerates from R2 on startup** (`regenerate_missing_collections`, daemon thread in `api/main.py`), so an ephemeral-disk host needs no paid persistent volume. Code-complete and mechanically verified (imports, rate-limit 429s, regeneration no-op, frontend build). Remaining work is the **manual deploy** (HF Space + Vercel + domain + key rotation) per DEPLOYMENT.md.
 
 ---
 

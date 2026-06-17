@@ -1,4 +1,7 @@
-const BASE = '/api'
+// Dev: unset → '/api', served via Vite's proxy (vite.config.js).
+// Prod: set VITE_API_URL to the backend's URL at build time, since the
+// frontend (your domain) and backend (e.g. *.hf.space) are different origins.
+const BASE = import.meta.env.VITE_API_URL || '/api'
 
 // api.js is plain functions, not components, so it can't use Clerk's
 // useAuth() hook — window.Clerk is set globally by @clerk/clerk-react

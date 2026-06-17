@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 import time
-import shutil
 from typing import Optional
 from pydantic import BaseModel
 
@@ -12,13 +11,19 @@ from pydantic import BaseModel
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+import threading
+
 from ingestion.pipeline import answer_query, compare_papers
 from ingestion.rewriter import rewrite_text
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from api.auth import get_current_user_id
-from api.ingestion_runner import run_ingestion_from_storage
+from api.ingestion_runner import run_ingestion_from_storage, regenerate_missing_collections
 from api.storage import (
     create_paper_record,
     update_paper_status,
@@ -30,11 +35,22 @@ from api.storage import (
     delete_paper_record,
 )
 from api.usage import enforce_paper_quota, enforce_query_quota, get_usage_summary, record_usage
+from api.uploads import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, PDF_MAGIC
 from api.logger import generate_request_id, log_query
 from ingestion.bm25_retriever  import invalidate_bm25_cache
+from ingestion.retriever import collection_name
 from api.billing import router as billing_router
 from discovery.router import router as discovery_router
 from discovery.search  import search_papers
+
+# CORS: a comma-separated allow-list, locked down from the old "*". Defaults to
+# the Vite dev origin; set ALLOWED_ORIGINS to the real domain(s) in production.
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+
+# Per-IP rate limiting. 120/min is generous for real humans but caps scripted
+# abuse on the public endpoints. The Stripe webhook and /health pings ride the
+# same global limit — fine at launch volume; add a path exemption if needed.
+limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
 
 app = FastAPI(
     title="PaperMind API",
@@ -42,9 +58,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,6 +72,17 @@ app.add_middleware(
 
 app.include_router(discovery_router)
 app.include_router(billing_router)
+
+
+@app.on_event("startup")
+def _regenerate_chroma_on_startup():
+    """On an ephemeral-disk host (e.g. HF Spaces free tier), data/chroma_db is
+    wiped on redeploy. Rebuild any missing collection from R2 in a background
+    daemon thread so /health comes up immediately and papers become queryable
+    as they finish rebuilding. Disable with PAPERMIND_REGENERATE_ON_STARTUP=0."""
+    if os.getenv("PAPERMIND_REGENERATE_ON_STARTUP", "1") == "0":
+        return
+    threading.Thread(target=regenerate_missing_collections, daemon=True).start()
 
 
 @app.get("/health")
@@ -68,12 +99,37 @@ async def upload_paper(
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
-    paper_id = create_paper_record(file.filename, user_id)
-
+    # Stream to a temp file with server-side validation: the bytes must
+    # actually be a PDF (magic number), and stay under the size cap. A .pdf
+    # extension alone is trivially spoofable.
     fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+    total = 0
+    first = True
     try:
         with os.fdopen(fd, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+            while chunk := await file.read(1024 * 1024):
+                if first:
+                    if not chunk.startswith(PDF_MAGIC):
+                        raise HTTPException(status_code=400, detail="File is not a valid PDF.")
+                    first = False
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"PDF exceeds the {MAX_UPLOAD_MB} MB upload limit.",
+                    )
+                f.write(chunk)
+        if first:  # never entered the loop → empty file
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    except HTTPException:
+        os.remove(temp_path)
+        raise
+    except Exception:
+        os.remove(temp_path)
+        raise HTTPException(status_code=400, detail="Could not read the uploaded file.")
+
+    paper_id = create_paper_record(file.filename, user_id)
+    try:
         upload_pdf(paper_id, temp_path)
     except Exception as exc:
         update_paper_status(paper_id, "failed", error=f"Upload to storage failed: {exc}")
@@ -126,10 +182,7 @@ def delete_paper(paper_id: str, user_id: str = Depends(get_current_user_id)):
     try:
         import chromadb
         chroma = chromadb.PersistentClient(path="data/chroma_db")
-        clean_name = "".join(
-            c if c.isalnum() or c == "-" else "-" for c in paper_id
-        ).strip("-").lower()
-        chroma.delete_collection(name=clean_name)
+        chroma.delete_collection(name=collection_name(paper_id))
     except Exception as exc:
         # The collection may legitimately be missing (ingestion never
         # completed) — log it so a real failure is still visible.

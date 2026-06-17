@@ -114,6 +114,14 @@ def list_papers(user_id: str) -> list:
             return cur.fetchall()
 
 
+def list_ready_paper_ids() -> list[str]:
+    """All paper_ids in 'ready' status, across every user. Used by the
+    startup routine that rebuilds missing Chroma collections from R2."""
+    with _pool.connection() as conn:
+        cur = conn.execute("SELECT paper_id FROM papers WHERE status = 'ready'")
+        return [row[0] for row in cur.fetchall()]
+
+
 def delete_paper_record(paper_id: str) -> bool:
     """Removes a paper from the registry. Returns True if it existed."""
     with _pool.connection() as conn:

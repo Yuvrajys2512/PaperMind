@@ -4,11 +4,23 @@ from ingestion.models import embed_query
 client = chromadb.PersistentClient(path="data/chroma_db")
 
 
-def retrieve(query: str, paper_name: str, top_k: int = 5) -> list:
-    clean_name = "".join(
+def collection_name(paper_name: str) -> str:
+    """Deterministic Chroma collection name for a paper_id. Single source of
+    truth — used by retrieval, deletion, and startup regeneration alike."""
+    return "".join(
         c if c.isalnum() or c == "-" else "-"
         for c in paper_name
     ).strip("-").lower()
+
+
+def collection_exists(paper_name: str) -> bool:
+    """True if this paper already has a Chroma collection on disk."""
+    name = collection_name(paper_name)
+    return any(c.name == name for c in client.list_collections())
+
+
+def retrieve(query: str, paper_name: str, top_k: int = 5) -> list:
+    clean_name = collection_name(paper_name)
 
     collection = client.get_collection(name=clean_name)
 

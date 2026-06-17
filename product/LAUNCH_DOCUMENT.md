@@ -1,4 +1,4 @@
-# PaperMind — Build Log (Launch Checklist §1–§2)
+# PaperMind — Build Log (Launch Checklist §1–§4)
 
 This is a narrative record of how PaperMind went from a single-user demo toward a real product — what we built, in what order, why each decision was made, and how we verified it actually worked. It covers the work behind every checked box in `LAUNCH_CHECKLIST.md` §1 (multi-tenancy) and §2 (LLM economics) so far. Read this top to bottom and you should understand the whole thing without having to reconstruct it from diffs.
 
@@ -230,7 +230,9 @@ New environment variables (optional, both have defaults): `PAPERMIND_FREE_MAX_PA
 
 **§3 (Stripe billing)**: code-complete and mechanically verified — see Part 3 below. Live test-mode e2e is the one remaining manual step.
 
-**Not started**: §4 (deployment hardening — most of the mechanics are already written up in `DEPLOYMENT.md`), §5 (Sentry/PostHog, landing page, ToS/Privacy Policy).
+**§4 (deployment & hardening)**: code-complete and mechanically verified — see Part 4 below. The live deploy (HF Space + Vercel + domain) is manual.
+
+**Not started**: §5 (Sentry/PostHog, landing page, ToS/Privacy Policy).
 
 ---
 
@@ -299,3 +301,74 @@ Every verified event returns `{"received": true}` (even ones we don't act on) so
 | Upgrade UX | New `BillingPage.jsx` + "Plan" nav + 429 upsell | Makes paying reachable from the product, not just the API |
 
 New files: `api/billing.py`, `frontend/src/pages/BillingPage.jsx`. Modified: `api/usage.py` (`"pro"` tier + `set_user_tier`), `api/main.py` (router mount), `requirements.txt` (`stripe>=11`), `frontend/src/api.js` (billing fns + status-carrying errors), `frontend/src/App.jsx` (route + return handling), `frontend/src/pages/UploadPage.jsx` ("Plan" nav + 429 upsell). New env vars: `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`, `PAPERMIND_FRONTEND_URL` (default `http://localhost:5173`).
+
+---
+
+# Part 4 — Deployment & Hardening (§4)
+
+## 21. The problem, and the decisions that shaped it
+
+§1–§3 made PaperMind correct and monetizable; §4 makes it *deployable as a real product* and closes the obvious holes in a public surface. Two constraints from the user framed everything: **free-tier now**, but a **real paid product on its own domain**.
+
+Those sound contradictory for an app that loads PyTorch + two models (≈2 GB RAM), so the decisions were made explicitly rather than assumed:
+
+- **The two halves split across two hosts, and the domain is the *frontend's*.** Users only ever see the domain (Vercel, free, custom domain). The backend's URL is invisible behind it. So a free backend host is fully compatible with "my own domain / charges money."
+- **Backend → Hugging Face Spaces free, not Render free.** A quick check of current specs (not memory) settled it: Render's free tier is 512 MB RAM — it can't even boot torch. HF Spaces free is 2 vCPU / **16 GB RAM**. It's the only free option that runs this backend. Its real catches — 48 h idle-sleep and an ephemeral disk — are livable and handled (below).
+- **ChromaDB durability via regenerate-on-startup, not a paid disk.** This is the interesting one (§24).
+- **Rate limiting added now; job-queue deferred.** The checklist itself says in-process ingestion is fine at launch.
+
+The code is **host-agnostic** — only `DEPLOYMENT.md` names HF/Vercel. Nothing here locks PaperMind to a host.
+
+## 22. CORS lockdown + rate limiting
+
+`api/main.py` had `allow_origins=["*"]` — fine for dev, wrong for a credentialed public API (and actually invalid combined with `allow_credentials=True`). Replaced with an env-driven `ALLOWED_ORIGINS` list (default `localhost:5173`), set to the real domain at deploy.
+
+Rate limiting uses **slowapi** with a global `120/minute` per-IP default via `SlowAPIMiddleware`. We chose the middleware + `default_limits` form deliberately over the per-route `@limiter.limit` decorator: slowapi's decorator requires a `request: Request` parameter in the endpoint signature, and our query routes already bind a Pydantic model *named* `request` — the decorator would clash. The middleware applies the cap globally with no signature changes. The trade-off noted in code: the Stripe webhook and `/health` pings ride the same bucket, which is fine at launch volume (a path exemption is a later tweak if needed).
+
+## 23. Upload validation
+
+A `.pdf` extension proves nothing — it's trivially spoofable, and the import flow pulls from an *arbitrary URL*. New `api/uploads.py` centralizes two cheap, real checks: the bytes must start with the `%PDF-` magic number, and the file must stay under `PAPERMIND_MAX_UPLOAD_MB` (default 25). Both entry points enforce them while streaming to a temp file: `/upload` (a chunked validating copy that replaced `shutil.copyfileobj`, returning 400 for non-PDF and 413 for oversize) and `discovery/fetcher.py`'s URL download. A nice side effect in `/upload`: the registry row is now created *after* validation, so a rejected upload no longer leaves an orphaned `processing` row.
+
+## 24. ChromaDB regenerate-on-startup — the piece worth understanding
+
+The free HF Spaces disk is **ephemeral**: wiped on every rebuild/restart. ChromaDB lives there (§1 deliberately kept it local since it's regenerable). PDFs are in R2 and the registry in Neon — so the index can always be rebuilt. §4 makes that automatic.
+
+- `regenerate_missing_collections()` (in `api/ingestion_runner.py`) lists all `ready` papers (`list_ready_paper_ids()` added to `api/storage.py`), checks each against the live Chroma collections, and re-ingests only the missing ones via the existing `run_ingestion_from_storage`. It is **idempotent** — papers that already have a collection are skipped, so on a warm or (future) persistent disk it's a near-instant no-op.
+- A `@app.on_event("startup")` hook fires it in a **daemon thread**, so `/health` answers immediately (HF's health check passes) while papers rebuild in the background. Toggle with `PAPERMIND_REGENERATE_ON_STARTUP=0`.
+- **Cost honesty:** re-ingestion calls LLMs (section detection). Since that's a server-side rebuild, not a user action, the usage event is logged as `kind="regenerate"` (a `kind` arg threaded through `run_ingestion_from_storage`) so the §2 cost dashboard never conflates it with a real user upload. It doesn't touch quotas, which are count-based.
+- While here, the collection-name logic — duplicated in `ingestion/retriever.py` and the delete path in `api/main.py` — was centralized into `collection_name()`/`collection_exists()` in `retriever.py` and reused everywhere.
+
+The escape hatch: when there are paying users, HF's $5/mo persistent storage makes the disk durable and the whole regeneration step a silent no-op — no code change.
+
+## 25. The Dockerfile (and a bug in the old guide)
+
+The previous `DEPLOYMENT.md` carried a Dockerfile that would have **shipped broken**: it copied only `api` and `ingestion` (missing `discovery`, which `api.main` imports), and pre-downloaded `all-MiniLM-L6-v2` — *not* a model PaperMind loads. Reading `ingestion/models.py` and `ingestion/reranker.py` showed the real hot-path models are `BAAI/bge-small-en-v1.5` (embeddings, used everywhere incl. the evaluator — whose "all-MiniLM" docstring is just stale) and `cross-encoder/ms-marco-MiniLM-L-6-v2` (reranker). The new root `Dockerfile` copies all three packages, bakes the two correct models so the first post-deploy request doesn't stall on a download, runs a single worker (Chroma/in-mem models aren't multi-worker safe), and binds `${PORT:-7860}` (7860 = HF default, `$PORT` keeps it portable to Render/Fly). A `.dockerignore` keeps `venv/`, `data/`, `.env`, `frontend/`, and dev-only dirs out of the image.
+
+## 26. Frontend configurable API base
+
+`frontend/src/api.js` hard-coded `const BASE = '/api'` (the Vite dev proxy). In prod the frontend and backend are different origins, so it's now `import.meta.env.VITE_API_URL || '/api'` — dev keeps the proxy, prod sets `VITE_API_URL` to the Space URL at Vercel build time.
+
+## 27. Docs reconciliation
+
+`DEPLOYMENT.md` predated §1–§3 and was actively misleading (local-disk storage, "no auth," the broken Dockerfile). It was rewritten around the real architecture and the free HF Spaces + Vercel + custom-domain path: corrected Dockerfile/models, the full env-var reference (Clerk/Neon/R2/Stripe/CORS), the key-rotation action (every key was pasted in chat), the production Stripe-webhook wiring (dashboard endpoint, not `stripe listen`), and a failure-mode table.
+
+## 28. Verification
+
+- **Imports:** `api.main` imports clean with the slowapi limiter, both middlewares (CORS + SlowAPI), and the startup hook wired.
+- **Rate limiting (behavioral):** 135 `TestClient` GETs to `/health` returned **exactly 120×200 then 15×429** — the cap enforces precisely.
+- **Regeneration (safe dry-run):** against the warm local `data/chroma_db`, the listing + existence logic reported "1 ready paper, 0 to regenerate" — confirming the idempotent no-op before trusting it to rebuild on a fresh disk. (A full rebuild-from-empty costs LLM calls, so it's validated on the real HF deploy.)
+- **Frontend:** `eslint src` + `vite build` clean after the `api.js` change.
+- **Upload validation:** logic is import-verified; full 400/413 behavior needs an authed running server, so it folds into the deploy-time smoke test.
+
+## 29. Tech stack / files — summary (§4)
+
+| Concern | Mechanism | Why |
+|---|---|---|
+| Public-surface limits | `slowapi` global 120/min + env-driven CORS | Cheap abuse insurance; CORS correct for a credentialed API |
+| Upload safety | `api/uploads.py` magic-byte + size cap, both entry points | Extension/URL content can't be trusted |
+| Free-tier durability | Regenerate Chroma from R2 on startup (daemon thread) | No paid disk; index is regenerable by design |
+| Image | `Dockerfile` (3.12-slim, models baked, 3 packages, `$PORT`) | Correct + fast cold start; host-portable |
+
+New files: `api/uploads.py`, `Dockerfile`, `.dockerignore`. Modified: `api/main.py` (CORS env, slowapi, startup regeneration, upload validation, delete dedup), `api/storage.py` (`list_ready_paper_ids`), `api/ingestion_runner.py` (`regenerate_missing_collections` + `kind` arg), `ingestion/retriever.py` (`collection_name`/`collection_exists`), `discovery/fetcher.py` (download validation), `frontend/src/api.js` (configurable base), `requirements.txt` (`slowapi`), and a rewritten `product/DEPLOYMENT.md`. New env vars: `ALLOWED_ORIGINS`, `PAPERMIND_MAX_UPLOAD_MB`, `PAPERMIND_REGENERATE_ON_STARTUP`, plus the frontend's `VITE_API_URL`.
+
+---

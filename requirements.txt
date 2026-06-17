@@ -21,6 +21,9 @@ fastapi>=0.130
 uvicorn[standard]>=0.46
 python-multipart>=0.0.20
 
+# Per-IP rate limiting
+slowapi>=0.1.9
+
 # LLM providers (all accessed via OpenAI-compatible interface)
 openai>=2.0
 

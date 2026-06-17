@@ -3,6 +3,7 @@ import tempfile
 
 import httpx
 from api.storage import create_paper_record, update_paper_status, upload_pdf
+from api.uploads import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, PDF_MAGIC
 
 _TIMEOUT = 45.0
 _HEADERS = {
@@ -16,6 +17,8 @@ async def download_paper(pdf_url: str, title: str, user_id: str, source_id: str 
     safe_name = (title[:80].strip() or "paper") + ".pdf"
 
     fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+    total = 0
+    first = True
     try:
         with os.fdopen(fd, "wb") as f:
             async with httpx.AsyncClient(
@@ -26,7 +29,19 @@ async def download_paper(pdf_url: str, title: str, user_id: str, source_id: str 
                 async with client.stream("GET", pdf_url) as resp:
                     resp.raise_for_status()
                     async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        # A URL can return non-PDF or arbitrarily large content —
+                        # validate the magic number and enforce the size cap, same
+                        # as the direct-upload path.
+                        if first:
+                            if not chunk.startswith(PDF_MAGIC):
+                                raise ValueError("URL did not return a PDF.")
+                            first = False
+                        total += len(chunk)
+                        if total > MAX_UPLOAD_BYTES:
+                            raise ValueError(f"PDF exceeds the {MAX_UPLOAD_MB} MB limit.")
                         f.write(chunk)
+        if first:
+            raise ValueError("Downloaded file was empty.")
 
         # Only create the registry row once the download has actually
         # succeeded — creating it beforehand left orphaned "processing"

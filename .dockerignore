@@ -1,0 +1,27 @@
+# Keep the image small and secret-free. The backend only needs api/,
+# ingestion/, discovery/ and requirements.txt (see Dockerfile).
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+
+# Secrets never go in the image — set them as host env vars.
+.env
+
+# Regenerable / not needed at runtime.
+data/
+output/
+scratch/
+
+# Frontend is built and hosted separately (Vercel).
+frontend/
+
+# Research/eval/dev-only code not imported by api.main.
+eval/
+scripts/
+research/
+
+# Docs.
+*.md
