@@ -8,6 +8,15 @@ async function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+// Build an Error carrying the HTTP status, so callers can tell a quota 429
+// apart from other failures without string-matching the message.
+async function httpError(res, fallback) {
+  const body = await res.json().catch(() => ({}))
+  const err = new Error(body.detail || fallback)
+  err.status = res.status
+  return err
+}
+
 export async function uploadPaper(file) {
   const form = new FormData()
   form.append('file', file)
@@ -16,10 +25,7 @@ export async function uploadPaper(file) {
     headers: await authHeaders(),
     body: form,
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || 'Upload failed')
-  }
+  if (!res.ok) throw await httpError(res, 'Upload failed')
   return res.json()
 }
 
@@ -35,10 +41,7 @@ export async function queryPaper(paperId, question) {
     headers: { 'Content-Type': 'application/json', ...await authHeaders() },
     body: JSON.stringify({ paper_id: paperId, question })
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || 'Query failed')
-  }
+  if (!res.ok) throw await httpError(res, 'Query failed')
   return res.json()
 }
 
@@ -78,8 +81,7 @@ async function streamQuery(body, onEvent) {
     body: JSON.stringify(body),
   })
   if (!res.ok || !res.body) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `Stream failed: HTTP ${res.status}`)
+    throw await httpError(res, `Stream failed: HTTP ${res.status}`)
   }
 
   const reader  = res.body.getReader()
@@ -185,4 +187,31 @@ export async function importPaper(result) {
     throw new Error(err.detail || `Import failed: HTTP ${res.status}`)
   }
   return res.json()
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Billing — usage/plan + Stripe Checkout / customer portal
+───────────────────────────────────────────────────────────────── */
+export async function getUsage() {
+  const res = await fetch(`${BASE}/usage`, { headers: await authHeaders() })
+  if (!res.ok) throw await httpError(res, 'Failed to load plan')
+  return res.json()
+}
+
+export async function startCheckout() {
+  const res = await fetch(`${BASE}/billing/checkout`, {
+    method: 'POST',
+    headers: await authHeaders(),
+  })
+  if (!res.ok) throw await httpError(res, 'Could not start checkout')
+  return res.json() // { url }
+}
+
+export async function openBillingPortal() {
+  const res = await fetch(`${BASE}/billing/portal`, {
+    method: 'POST',
+    headers: await authHeaders(),
+  })
+  if (!res.ok) throw await httpError(res, 'Could not open billing portal')
+  return res.json() // { url }
 }

@@ -32,6 +32,7 @@ from api.storage import (
 from api.usage import enforce_paper_quota, enforce_query_quota, get_usage_summary, record_usage
 from api.logger import generate_request_id, log_query
 from ingestion.bm25_retriever  import invalidate_bm25_cache
+from api.billing import router as billing_router
 from discovery.router import router as discovery_router
 from discovery.search  import search_papers
 
@@ -50,6 +51,7 @@ app.add_middleware(
 )
 
 app.include_router(discovery_router)
+app.include_router(billing_router)
 
 
 @app.get("/health")

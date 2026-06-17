@@ -1,14 +1,27 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { SignedIn, SignedOut, SignIn, UserButton } from '@clerk/clerk-react'
 import UploadPage from './pages/UploadPage'
 import ChatPage from './pages/ChatPage'
 import DiscoverPage from './pages/DiscoverPage'
 import LibraryPage from './pages/LibraryPage'
 import RewritePage from './pages/RewritePage'
+import BillingPage from './pages/BillingPage'
 
 function AppPages() {
-  const [page, setPage]               = useState('upload')
+  // Land on the billing page after returning from Stripe Checkout/portal
+  // (success_url / cancel_url carry ?billing=…), then strip the param so a
+  // refresh doesn't keep forcing it.
+  const [page, setPage] = useState(() => {
+    const hasBillingReturn = new URLSearchParams(window.location.search).has('billing')
+    return hasBillingReturn ? 'billing' : 'upload'
+  })
   const [currentPaper, setCurrentPaper] = useState(null)
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('billing')) {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
 
   const handlePaperReady = (paper) => {
     setCurrentPaper(paper)
@@ -39,12 +52,16 @@ function AppPages() {
   if (page === 'rewrite') {
     return <RewritePage onBack={() => setPage('upload')} />
   }
+  if (page === 'billing') {
+    return <BillingPage onBack={() => setPage('upload')} />
+  }
   return (
     <UploadPage
       onPaperReady={handlePaperReady}
       onDiscover={() => setPage('discover')}
       onLibrary={() => setPage('library')}
       onRewrite={() => setPage('rewrite')}
+      onBilling={() => setPage('billing')}
     />
   )
 }

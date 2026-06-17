@@ -228,4 +228,74 @@ New environment variables (optional, both have defaults): `PAPERMIND_FREE_MAX_PA
 - Done and verified: per-request cost tracking (queries *and* uploads) and per-user quotas (3 papers / 20 queries/month, env-configurable), including a `GET /usage` endpoint and legible error messages on the frontend when a limit is hit.
 - Not done: **paid API keys** (manual action for whoever owns the provider accounts — no code blocker) and **disabling expensive stages on the free tier** (deliberately deferred — there's no paid tier yet to contrast against, and the checklist itself only says "consider").
 
-**Not started**: §3 (Stripe billing), §4 (deployment hardening — most of the mechanics are already written up in `DEPLOYMENT.md`), §5 (Sentry/PostHog, landing page, ToS/Privacy Policy).
+**§3 (Stripe billing)**: code-complete and mechanically verified — see Part 3 below. Live test-mode e2e is the one remaining manual step.
+
+**Not started**: §4 (deployment hardening — most of the mechanics are already written up in `DEPLOYMENT.md`), §5 (Sentry/PostHog, landing page, ToS/Privacy Policy).
+
+---
+
+# Part 3 — Stripe Billing (§3)
+
+## 14. The problem, and why it was small
+
+§2 ended by deliberately leaving two things in place that turn out to be most of §3's foundation: a `users.tier` column (default `'free'`) and a quota system that reads that column and **fails open** on any tier it doesn't recognise. So §3 wasn't "build billing from scratch" — it was "let Stripe move a user between tiers, and make `pro` mean unlimited." Everything that *enforces* the difference (the quota dependencies on `/upload`, `/query`, `/query/stream`) already existed and needed no changes at all.
+
+Four product decisions were made with the user up front rather than assumed:
+- **Pro = lift quotas only.** `pro` → unlimited papers + queries. The §2 decision to *not* gate features (evidence grading, multi-hop) by tier stays in force — gating now would degrade the product for every existing free user with nothing to upgrade *to* yet. Revisit once there's real paid usage.
+- **$9/mo, single recurring price**, referenced by `STRIPE_PRICE_ID` env var so annual/other prices can be added later without code.
+- **Test-mode keys** available → verification is via the Stripe CLI + test card.
+- **Full upgrade UX**, not backend-only — otherwise there's no way for a user to actually pay.
+
+## 15. The entitlement model — why there's no new "entitlement middleware"
+
+The checklist says "entitlement check in the same middleware that enforces quotas." Taken literally that sounds like a new gate. But the quota dependencies from §2 (`enforce_paper_quota` / `enforce_query_quota` in `api/usage.py`) *already* resolve `users.tier` → `TIER_LIMITS` on every protected request. A `pro` user whose limits are unlimited passes them for free. So **the tier lookup already is the entitlement check** — the only thing §3 adds is the thing that *sets* the tier (Stripe), plus making `pro` resolve to unlimited.
+
+Making `pro` unlimited was a one-line change: `"pro": None` in `TIER_LIMITS`. `None` rides the *exact same* code path (`_limits_for` → `None` ⇒ no caps) that §2 already used for unknown tiers, so there was no new branch to enforce or test. This is why §3 touched the pipeline and the quota code essentially not at all.
+
+## 16. `api/billing.py` — the new module
+
+Built to mirror `api/usage.py`'s shape exactly (reuse the `_pool` from `api/storage.py`, an `_ensure_schema()` run at import, an `APIRouter` included from `main.py` next to `discovery_router`), so it reads like the code already there.
+
+- **`subscriptions` table** keyed by `user_id`, storing `stripe_customer_id` (UNIQUE), `stripe_subscription_id`, `status`, `current_period_end`. Two reasons for the customer-id mapping: a returning user reuses one Stripe customer instead of spawning duplicates, and webhook events — which identify the account only by `customer` — can be mapped back to *our* `user_id`.
+- **Table ownership stays clean**: `usage.py` owns `users`, `billing.py` owns `subscriptions`. Billing flips the tier through a new `usage.set_user_tier(user_id, tier)` helper rather than writing the `users` table directly, so all `users` writes stay in one module.
+- **Fail-loud config**, matching `auth.py`/`storage.py`: the module raises at import if `STRIPE_SECRET_KEY` / `STRIPE_PRICE_ID` / `STRIPE_WEBHOOK_SECRET` are missing, rather than failing deep inside a request later.
+- **Three endpoints**: `POST /billing/checkout` (auth'd; get-or-create customer → subscription Checkout Session, stamping `client_reference_id=user_id` *and* `subscription_data.metadata.user_id` so the user is recoverable from either the session or the subscription), `POST /billing/portal` (auth'd; opens the hosted portal for the user's customer), and `POST /billing/webhook`.
+
+## 17. The webhook — the one genuinely security-sensitive piece
+
+The webhook is the only route in the whole app that is **not** behind Clerk auth — Stripe calls it, not a logged-in browser. Its authenticity comes entirely from the Stripe signature over the **raw request body**, so it reads `await request.body()` (the exact bytes) and verifies with `stripe.Webhook.construct_event(...)`; any failure (bad or missing signature, malformed payload) returns **400**, never 200 or 500. It handles three events:
+- `checkout.session.completed` → record the subscription, `set_user_tier(user_id, "pro")`.
+- `customer.subscription.updated` → tier follows status: `pro` while `active`/`trialing`, else `free`.
+- `customer.subscription.deleted` → `set_user_tier(user_id, "free")`.
+
+Every verified event returns `{"received": true}` (even ones we don't act on) so Stripe stops retrying. Webhook-driven tier is treated as the source of truth — acceptable for launch because Stripe retries failed deliveries and the customer portal reconciles any user-initiated change.
+
+## 18. Frontend — making it actually usable
+
+- `frontend/src/api.js`: added `startCheckout()`, `openBillingPortal()`, and `getUsage()` (no wrapper for the existing `GET /usage` existed yet). Also added a small `httpError(res, fallback)` helper that **attaches the HTTP status to the thrown Error** — so the UI can tell a quota `429` apart from any other failure without brittle string-matching. Refactored `uploadPaper` / `queryPaper` / `streamQuery` onto it (they previously discarded the status).
+- New `frontend/src/pages/BillingPage.jsx`: reads `getUsage()`, shows the current tier + papers/queries meters (a `null` limit renders as "unlimited"), and a single CTA — "Upgrade to Pro — $9/mo" (→ Checkout) when free, "Manage billing" (→ portal) when pro — each redirecting to the Stripe-hosted page.
+- Wiring in `App.jsx`: a new `billing` page in the existing page-state router, a "Plan" link in `UploadPage`'s top nav, and **`?billing=success` return handling** — after Stripe redirects back, the app lands on the billing page and strips the query param so a refresh doesn't re-trigger it.
+- **429 upsell**: `UploadPage`'s error box now shows an "Upgrade" button (instead of "Try again") when the upload failed specifically because of a quota cap. For `ChatPage`, the existing toast already surfaces the backend's specific message ("Free tier limit of 20 queries/month reached…"); threading a CTA deeper into that component tree was judged disproportionate for v1.
+
+## 19. Verification
+
+- **Mechanical (done):** `stripe` installed (15.2.1, satisfies `>=11`). `import api.billing, api.usage` is clean and creates the `subscriptions` table on the real Neon DB. `import api.main` is clean and exposes exactly `/billing/checkout`, `/billing/portal`, `/billing/webhook`. Frontend `eslint src` is clean and `vite build` succeeds.
+- **Live test-mode e2e (manual, pending the account owner's keys):**
+  1. In the Stripe **test** dashboard, create a Product with a $9/mo recurring Price → put its id in `STRIPE_PRICE_ID`. Put the test secret key in `STRIPE_SECRET_KEY`.
+  2. `stripe listen --forward-to localhost:8000/billing/webhook` → copy the printed `whsec_…` into `STRIPE_WEBHOOK_SECRET`.
+  3. Start backend + frontend, sign in, **Plan → Upgrade**, pay with test card `4242 4242 4242 4242`. Confirm `checkout.session.completed` in the `stripe listen` log, a `subscriptions` row, `users.tier` flipped to `pro`, and `GET /usage` showing `tier: pro` with unlimited (null) caps.
+  4. Confirm a 4th paper / 21st query is no longer blocked.
+  5. Cancel via the portal → `customer.subscription.deleted` → tier back to `free`, caps re-enforced.
+  6. A POST to `/billing/webhook` with a bad signature returns 400.
+- Clean up any synthetic `subscriptions`/`users` test rows from Neon afterward (same discipline as §2).
+
+## 20. Tech stack / files — summary (§3)
+
+| Concern | Tool / mechanism | Why |
+|---|---|---|
+| Checkout + portal + webhooks | **Stripe** (`stripe` Python SDK) + Stripe-hosted Checkout/portal | Standard path; no card data ever touches our server |
+| Subscription state | New `subscriptions` table on the existing Neon Postgres | Reuses the §1 connection pool — no new infra |
+| Entitlement | Existing `users.tier` + the §2 quota dependencies | The tier check already gates quotas; `pro` = unlimited via one line in `TIER_LIMITS` |
+| Upgrade UX | New `BillingPage.jsx` + "Plan" nav + 429 upsell | Makes paying reachable from the product, not just the API |
+
+New files: `api/billing.py`, `frontend/src/pages/BillingPage.jsx`. Modified: `api/usage.py` (`"pro"` tier + `set_user_tier`), `api/main.py` (router mount), `requirements.txt` (`stripe>=11`), `frontend/src/api.js` (billing fns + status-carrying errors), `frontend/src/App.jsx` (route + return handling), `frontend/src/pages/UploadPage.jsx` ("Plan" nav + 429 upsell). New env vars: `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`, `PAPERMIND_FRONTEND_URL` (default `http://localhost:5173`).

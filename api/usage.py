@@ -23,10 +23,11 @@ TIER_LIMITS = {
         "max_papers": int(os.getenv("PAPERMIND_FREE_MAX_PAPERS", "3")),
         "max_queries_per_month": int(os.getenv("PAPERMIND_FREE_MAX_QUERIES_PER_MONTH", "20")),
     },
-    # No "pro" entry yet — §3/Stripe adds one when it lands. A tier with no
-    # entry here is treated as unlimited (see _limits_for), so a user whose
-    # `users.tier` row is flipped to "pro" before this dict is updated never
-    # gets wrongly locked out.
+    # "pro" (set by §3/Stripe's webhook) is explicitly unlimited. `None` rides
+    # the same code path as an unknown tier in _limits_for, so a `users.tier`
+    # value that Stripe flips before this dict is ever extended still fails
+    # open (unlimited) rather than wrongly locking out a paying user.
+    "pro": None,
 }
 
 
@@ -80,6 +81,19 @@ def get_user_tier(user_id: str) -> str:
         )
         cur = conn.execute("SELECT tier FROM users WHERE user_id = %s", (user_id,))
         return cur.fetchone()[0]
+
+
+def set_user_tier(user_id: str, tier: str) -> None:
+    """Upserts the user's row and sets their tier. This module owns the `users`
+    table, so billing (§3) flips tiers through here rather than touching it."""
+    with _pool.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (user_id, tier) VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET tier = EXCLUDED.tier
+            """,
+            (user_id, tier),
+        )
 
 
 def count_queries_this_month(user_id: str) -> int:

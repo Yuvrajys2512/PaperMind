@@ -147,11 +147,12 @@ function CitationPreview() {
 /* ─────────────────────────────────────────────────────────────────
    UPLOAD PAGE
 ───────────────────────────────────────────────────────────────── */
-export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewrite }) {
+export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewrite, onBilling }) {
   const [dragging, setDragging]             = useState(false)
   const [phase, setPhase]                   = useState('idle') // idle | uploading | processing | error
   const [filename, setFilename]             = useState('')
   const [error, setError]                   = useState('')
+  const [quotaHit, setQuotaHit]             = useState(false) // last error was a 429 quota cap
   const [uploadProgress, setUploadProgress] = useState(0)
   const [paperCount, setPaperCount]         = useState(null)
   const inputRef = useRef()
@@ -196,6 +197,7 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
       }, 2000)
     } catch (err) {
       setPhase('error')
+      setQuotaHit(err.status === 429)
       setError(err.message || 'Upload failed. Is the server running?')
     }
   }, [onPaperReady])
@@ -236,6 +238,7 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
           {onDiscover && <NavLink onClick={onDiscover}>Discover</NavLink>}
           {onLibrary  && <NavLink onClick={onLibrary} badge={paperCount}>Library</NavLink>}
           {onRewrite  && <NavLink onClick={onRewrite}>Rewrite</NavLink>}
+          {onBilling  && <NavLink onClick={onBilling}>Plan</NavLink>}
         </div>
       </nav>
 
@@ -331,12 +334,22 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
                   >
                     <span className="text-red-400 text-sm font-bold flex-shrink-0">!</span>
                     <p className="text-red-200/80 text-[13px] flex-1">{error}</p>
-                    <button
-                      onClick={() => setPhase('idle')}
-                      className="text-red-400/70 hover:text-red-300 text-xs transition-colors flex-shrink-0"
-                    >
-                      Try again
-                    </button>
+                    {quotaHit && onBilling ? (
+                      <button
+                        onClick={onBilling}
+                        className="text-xs font-semibold px-2.5 py-1 rounded-lg transition-opacity flex-shrink-0"
+                        style={{ background: ACCENT, color: '#0a0b0e' }}
+                      >
+                        Upgrade
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setPhase('idle')}
+                        className="text-red-400/70 hover:text-red-300 text-xs transition-colors flex-shrink-0"
+                      >
+                        Try again
+                      </button>
+                    )}
                   </div>
                 )}
 

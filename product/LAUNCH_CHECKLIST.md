@@ -39,14 +39,12 @@ To do:
 
 ## 3. Billing
 
-- [ ] **Stripe Checkout + customer portal** (the standard path).
-- [ ] A `subscriptions` table + webhook handler for subscription created/cancelled.
-- [ ] **Entitlement check** in the same middleware that enforces quotas.
-- [ ] **Decide the free/paid split early.** The natural split for this product:
-  - **Free** — limited papers/queries, basic answers
-  - **Paid** — unlimited papers, evidence-graded answers, multi-hop/comparison queries
+- [x] **Stripe Checkout + customer portal** (the standard path). *(`api/billing.py`: `POST /billing/checkout` creates a subscription Checkout Session; `POST /billing/portal` opens the hosted customer portal. Frontend `BillingPage.jsx` + a "Plan" nav link drive both.)*
+- [x] A `subscriptions` table + webhook handler for subscription created/cancelled. *(`subscriptions` table on Neon maps `user_id ↔ stripe_customer_id`; `POST /billing/webhook` verifies the Stripe signature and handles `checkout.session.completed` / `customer.subscription.updated` / `customer.subscription.deleted`.)*
+- [x] **Entitlement check** in the same machinery that enforces quotas. *(No new middleware — entitlement **is** the tier: the webhook flips `users.tier` to `pro`/`free`, and the existing `enforce_paper_quota`/`enforce_query_quota` dependencies already read `tier`. `pro` is unlimited via `TIER_LIMITS`.)*
+- [x] **Decide the free/paid split early.** *(Decided: **Free** = 3 papers + 20 queries/mo; **Pro = $9/mo** = unlimited papers + queries. Feature-level stage-gating (evidence grading / multi-hop) stays deferred per §2 — no current user is degraded.)*
 
-A few days of work once auth exists.
+> Code-complete and mechanically verified (imports, schema creation on Neon, frontend build/lint). The remaining manual step is the **live Stripe test-mode e2e** (create the $9/mo Price, run `stripe listen`, complete Checkout with test card `4242…`) — it needs the account owner's test keys; see `LAUNCH_DOCUMENT.md` Part 3 for the exact steps.
 
 ---
 
