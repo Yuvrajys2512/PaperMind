@@ -1,5 +1,8 @@
+import os
+import tempfile
+
 import httpx
-from api.storage import create_paper_record, get_paper_pdf_path
+from api.storage import create_paper_record, update_paper_status, upload_pdf
 
 _TIMEOUT = 45.0
 _HEADERS = {
@@ -8,21 +11,33 @@ _HEADERS = {
 }
 
 
-async def download_paper(pdf_url: str, title: str, source_id: str = None) -> str:
-    """Download a PDF from pdf_url, register it, and return the new paper_id."""
+async def download_paper(pdf_url: str, title: str, user_id: str, source_id: str = None) -> str:
+    """Download a PDF from pdf_url, store it in R2, register it, and return the new paper_id."""
     safe_name = (title[:80].strip() or "paper") + ".pdf"
-    paper_id = create_paper_record(safe_name, source_id=source_id)
-    pdf_path = get_paper_pdf_path(paper_id)
 
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=_TIMEOUT,
-        headers=_HEADERS,
-    ) as client:
-        async with client.stream("GET", pdf_url) as resp:
-            resp.raise_for_status()
-            with open(pdf_path, "wb") as f:
-                async for chunk in resp.aiter_bytes(chunk_size=65536):
-                    f.write(chunk)
+    fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=_TIMEOUT,
+                headers=_HEADERS,
+            ) as client:
+                async with client.stream("GET", pdf_url) as resp:
+                    resp.raise_for_status()
+                    async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        f.write(chunk)
+
+        # Only create the registry row once the download has actually
+        # succeeded — creating it beforehand left orphaned "processing"
+        # rows on download failure with nothing to clean them up.
+        paper_id = create_paper_record(safe_name, user_id, source_id=source_id)
+        try:
+            upload_pdf(paper_id, temp_path)
+        except Exception as exc:
+            update_paper_status(paper_id, "failed", error=f"Upload to storage failed: {exc}")
+            raise
+    finally:
+        os.remove(temp_path)
 
     return paper_id

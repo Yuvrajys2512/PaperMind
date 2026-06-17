@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useAuth } from '@clerk/clerk-react'
 import { listPapers, deletePaper, queryPaperStream, getGlossary, getRecommendations } from '../api'
 import ReactMarkdown from 'react-markdown'
 import { Document, Page, pdfjs } from 'react-pdf'
@@ -217,6 +218,7 @@ function normalizeForMatch(s) {
 function PDFPreviewPanel({ pdfUrl, title, page, highlight, onClose }) {
   const panelRef  = useRef()
   const scrollRef = useRef()
+  const { getToken } = useAuth()
 
   // The Document loader wants a clean URL; the `#page=` hash is only useful
   // for the native "open in new tab" fallback.
@@ -231,6 +233,20 @@ function PDFPreviewPanel({ pdfUrl, title, page, highlight, onClose }) {
   const [pageNumber, setPageNumber] = useState(initialPage)
   const [width,      setWidth]      = useState(0)
   const [loadError,  setLoadError]  = useState(false)
+  // /papers/{id}/pdf is auth-gated; pdf.js's internal fetch for <Document file>
+  // doesn't go through api.js, so it needs its own Authorization header.
+  const [docFile,    setDocFile]    = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const token = await getToken()
+      if (!cancelled) {
+        setDocFile({ url: fileUrl, httpHeaders: token ? { Authorization: `Bearer ${token}` } : {} })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [fileUrl, getToken])
 
   // Evidence text to highlight, normalized once.
   const needle = useMemo(() => normalizeForMatch(highlight), [highlight])
@@ -284,6 +300,23 @@ function PDFPreviewPanel({ pdfUrl, title, page, highlight, onClose }) {
   const goNext = () => setPageNumber(n => Math.min(numPages || n, n + 1))
 
   const tabUrl = `${fileUrl}#page=${pageNumber}`
+
+  // Plain <a href> navigation can't carry an Authorization header, and the
+  // PDF route is auth-gated — fetch it as a blob with the token instead and
+  // open that. Falls back to the direct URL if the fetch fails.
+  const handleOpenInTab = useCallback(async (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    try {
+      const token = await getToken()
+      const res = await fetch(fileUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      if (!res.ok) throw new Error('Failed to fetch PDF')
+      const blobUrl = URL.createObjectURL(await res.blob())
+      window.open(`${blobUrl}#page=${pageNumber}`, '_blank', 'noopener,noreferrer')
+    } catch {
+      window.open(tabUrl, '_blank', 'noopener,noreferrer')
+    }
+  }, [fileUrl, pageNumber, tabUrl, getToken])
 
   const navBtnStyle = (disabled) => ({
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -369,7 +402,7 @@ function PDFPreviewPanel({ pdfUrl, title, page, highlight, onClose }) {
           {/* Open in tab button */}
           <a
             href={tabUrl} target="_blank" rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()}
+            onClick={handleOpenInTab}
             title="Open in new tab"
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -426,13 +459,16 @@ function PDFPreviewPanel({ pdfUrl, title, page, highlight, onClose }) {
             }}>
               Couldn't render the PDF inline.{' '}
               <a href={tabUrl} target="_blank" rel="noopener noreferrer"
+                onClick={handleOpenInTab}
                 style={{ color: 'rgba(0,245,255,0.8)' }}>
                 Open it in a new tab
               </a>.
             </div>
+          ) : !docFile ? (
+            <div style={{ margin: 'auto', color: 'rgba(156,163,175,0.6)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>Loading PDF…</div>
           ) : (
             <Document
-              file={fileUrl}
+              file={docFile}
               onLoadSuccess={({ numPages }) => setNumPages(numPages)}
               onLoadError={() => setLoadError(true)}
               loading={<div style={{ margin: 'auto', color: 'rgba(156,163,175,0.6)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>Loading PDF…</div>}

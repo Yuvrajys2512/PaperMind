@@ -1,11 +1,12 @@
 import { useState } from 'react'
+import { SignedIn, SignedOut, SignIn, UserButton } from '@clerk/clerk-react'
 import UploadPage from './pages/UploadPage'
 import ChatPage from './pages/ChatPage'
 import DiscoverPage from './pages/DiscoverPage'
 import LibraryPage from './pages/LibraryPage'
 import RewritePage from './pages/RewritePage'
 
-export default function App() {
+function AppPages() {
   const [page, setPage]               = useState('upload')
   const [currentPaper, setCurrentPaper] = useState(null)
 
@@ -45,5 +46,23 @@ export default function App() {
       onLibrary={() => setPage('library')}
       onRewrite={() => setPage('rewrite')}
     />
+  )
+}
+
+export default function App() {
+  return (
+    <>
+      <SignedOut>
+        <div className="min-h-screen flex items-center justify-center">
+          <SignIn />
+        </div>
+      </SignedOut>
+      <SignedIn>
+        <div className="fixed top-4 right-4 z-50">
+          <UserButton />
+        </div>
+        <AppPages />
+      </SignedIn>
+    </>
   )
 }

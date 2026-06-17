@@ -1,7 +1,9 @@
 from api.storage import create_paper_record, update_paper_status, get_paper, list_papers
 
+TEST_USER_ID = "test-user"
+
 # Create a record
-paper_id = create_paper_record("attention_is_all_you_need.pdf")
+paper_id = create_paper_record("attention_is_all_you_need.pdf", TEST_USER_ID)
 print(f"Created: {paper_id}")
 
 # Read it back
@@ -14,7 +16,7 @@ record = get_paper(paper_id)
 print(f"Status after update: {record['status']}")  # should be 'ready'
 
 # List all
-all_papers = list_papers()
+all_papers = list_papers(TEST_USER_ID)
 print(f"Total papers: {len(all_papers)}")
 
 print("All good!")

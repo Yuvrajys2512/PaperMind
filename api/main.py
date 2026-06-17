@@ -1,6 +1,8 @@
 import sys
 import asyncio
 import json
+import os
+import tempfile
 import time
 import shutil
 from typing import Optional
@@ -12,19 +14,22 @@ sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from ingestion.pipeline import answer_query, compare_papers
 from ingestion.rewriter import rewrite_text
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse
+from api.auth import get_current_user_id
+from api.ingestion_runner import run_ingestion_from_storage
 from api.storage import (
     create_paper_record,
     update_paper_status,
-    get_paper,
+    get_owned_paper,
     list_papers,
-    get_paper_pdf_path,
+    upload_pdf,
+    get_pdf_stream,
+    delete_pdf,
     delete_paper_record,
 )
 from api.logger import generate_request_id, log_query
-from ingestion.ingest_document import ingest_document
 from ingestion.bm25_retriever  import invalidate_bm25_cache
 from discovery.router import router as discovery_router
 from discovery.search  import search_papers
@@ -46,65 +51,68 @@ app.add_middleware(
 app.include_router(discovery_router)
 
 
-def run_ingestion(paper_id: str, pdf_path: str, paper_name: str):
-    result = ingest_document(pdf_path=pdf_path, paper_name=paper_id)
-    if result["success"]:
-        update_paper_status(paper_id, "ready")
-    else:
-        update_paper_status(paper_id, "failed", error=result["error"])
-
-
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
 
 @app.post("/upload")
-async def upload_paper(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_paper(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
-    paper_id = create_paper_record(file.filename)
-    pdf_path = get_paper_pdf_path(paper_id)
-    with open(pdf_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    paper_id = create_paper_record(file.filename, user_id)
 
-    background_tasks.add_task(
-        run_ingestion,
-        paper_id=paper_id,
-        pdf_path=str(pdf_path),
-        paper_name=paper_id
-    )
+    fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        upload_pdf(paper_id, temp_path)
+    except Exception as exc:
+        update_paper_status(paper_id, "failed", error=f"Upload to storage failed: {exc}")
+        raise HTTPException(status_code=502, detail="Failed to store the uploaded PDF.")
+    finally:
+        os.remove(temp_path)
+
+    background_tasks.add_task(run_ingestion_from_storage, paper_id)
 
     return {"paper_id": paper_id, "filename": file.filename, "status": "processing"}
 
 
 @app.get("/status/{paper_id}")
-def get_status(paper_id: str):
-    paper = get_paper(paper_id)
+def get_status(paper_id: str, user_id: str = Depends(get_current_user_id)):
+    paper = get_owned_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     return paper
 
 
 @app.get("/papers")
-def get_all_papers():
-    return list_papers()
+def get_all_papers(user_id: str = Depends(get_current_user_id)):
+    return list_papers(user_id)
 
 
 @app.delete("/papers/{paper_id}")
-def delete_paper(paper_id: str):
-    paper = get_paper(paper_id)
+def delete_paper(paper_id: str, user_id: str = Depends(get_current_user_id)):
+    paper = get_owned_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
 
+    # Delete the PDF from R2 before the registry row. If this raises, the
+    # row is left in place (a recoverable "row exists, blob gone" state) —
+    # deleting the row first would risk an unreachable orphaned blob if the
+    # PDF delete then failed.
+    try:
+        delete_pdf(paper_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to delete PDF from storage: {exc}")
+
     # Remove from registry
     delete_paper_record(paper_id)
-
-    # Delete PDF from disk
-    pdf_path = get_paper_pdf_path(paper_id)
-    if pdf_path.exists():
-        pdf_path.unlink()
 
     # Drop ChromaDB collection
     try:
@@ -130,24 +138,25 @@ def delete_paper(paper_id: str):
 
 
 @app.get("/papers/{paper_id}/pdf")
-def serve_paper_pdf(paper_id: str):
-    paper = get_paper(paper_id)
+def serve_paper_pdf(paper_id: str, user_id: str = Depends(get_current_user_id)):
+    paper = get_owned_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
-    pdf_path = get_paper_pdf_path(paper_id)
-    if not pdf_path.exists():
+    try:
+        stream = get_pdf_stream(paper_id)
+    except Exception:
         raise HTTPException(status_code=404, detail="PDF file not found.")
     filename = paper.get("filename", f"{paper_id}.pdf")
-    return FileResponse(
-        path=str(pdf_path),
+    return StreamingResponse(
+        stream.iter_chunks(),
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 
 @app.get("/papers/{paper_id}/glossary")
-async def get_glossary(paper_id: str):
-    paper = get_paper(paper_id)
+async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id)):
+    paper = get_owned_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     if paper["status"] != "ready":
@@ -186,8 +195,8 @@ async def get_glossary(paper_id: str):
 
 
 @app.get("/papers/{paper_id}/recommendations")
-async def get_recommendations(paper_id: str):
-    paper = get_paper(paper_id)
+async def get_recommendations(paper_id: str, user_id: str = Depends(get_current_user_id)):
+    paper = get_owned_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     if paper["status"] != "ready":
@@ -243,7 +252,7 @@ class RewriteRequest(BaseModel):
 
 
 @app.post("/rewrite")
-async def rewrite(request: RewriteRequest):
+async def rewrite(request: RewriteRequest, user_id: str = Depends(get_current_user_id)):
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
     if request.mode not in ("academic", "plain", "concise"):
@@ -270,7 +279,7 @@ class QueryRequest(BaseModel):
 
 
 @app.post("/query")
-async def query_paper(request: QueryRequest):
+async def query_paper(request: QueryRequest, user_id: str = Depends(get_current_user_id)):
     req_id = generate_request_id()
     loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
@@ -280,7 +289,7 @@ async def query_paper(request: QueryRequest):
         paper_id_a, paper_id_b = request.paper_ids[0], request.paper_ids[1]
 
         for pid in (paper_id_a, paper_id_b):
-            p = get_paper(pid)
+            p = get_owned_paper(pid, user_id)
             if not p:
                 raise HTTPException(status_code=404, detail=f"Paper {pid} not found.")
             if p["status"] != "ready":
@@ -314,7 +323,7 @@ async def query_paper(request: QueryRequest):
     if not paper_id:
         raise HTTPException(status_code=400, detail="Provide paper_id or paper_ids.")
 
-    paper = get_paper(paper_id)
+    paper = get_owned_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     if paper["status"] != "ready":
@@ -383,7 +392,7 @@ def _make_progress_pusher(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop)
 
 
 @app.post("/query/stream")
-async def query_stream(request: QueryRequest):
+async def query_stream(request: QueryRequest, user_id: str = Depends(get_current_user_id)):
     req_id = generate_request_id()
     loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
@@ -396,7 +405,7 @@ async def query_stream(request: QueryRequest):
     if is_compare:
         paper_id_a, paper_id_b = request.paper_ids[0], request.paper_ids[1]
         for pid in (paper_id_a, paper_id_b):
-            p = get_paper(pid)
+            p = get_owned_paper(pid, user_id)
             if not p:
                 raise HTTPException(status_code=404, detail=f"Paper {pid} not found.")
             if p["status"] != "ready":
@@ -406,7 +415,7 @@ async def query_stream(request: QueryRequest):
         paper_id = request.paper_id or (request.paper_ids[0] if request.paper_ids else "")
         if not paper_id:
             raise HTTPException(status_code=400, detail="Provide paper_id or paper_ids.")
-        paper = get_paper(paper_id)
+        paper = get_owned_paper(paper_id, user_id)
         if not paper:
             raise HTTPException(status_code=404, detail="Paper not found.")
         if paper["status"] != "ready":

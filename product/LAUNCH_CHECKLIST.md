@@ -10,12 +10,12 @@ The core pipeline is genuinely differentiated, and [DEPLOYMENT.md](DEPLOYMENT.md
 
 Right now PaperMind is a single-user app. `api/storage.py` writes everything to one shared `data/papers.json` and one `data/papers/` folder, and ChromaDB has one shared index. Deployed as-is, every visitor would see every other visitor's uploaded papers — and could delete them.
 
-- [ ] **Auth** — don't build it yourself; use Clerk, Supabase Auth, or Auth0. Email + Google sign-in is enough.
-- [ ] **Per-user data scoping** — every paper record, chunk, and Chroma entry needs a `user_id`, and every query/list/delete endpoint must filter by it.
-- [ ] **Real storage instead of local disk**:
-  - `data/papers.json` → **Postgres** (Neon / Supabase free tier is fine)
-  - PDFs → **object storage** (S3 or Cloudflare R2)
-  - ChromaDB → either keep it with per-user metadata filtering on a persistent volume, or move to a hosted vector DB
+- [x] **Auth** — don't build it yourself; use Clerk, Supabase Auth, or Auth0. Email + Google sign-in is enough.
+- [x] **Per-user data scoping** — every paper record, chunk, and Chroma entry needs a `user_id`, and every query/list/delete endpoint must filter by it.
+- [x] **Real storage instead of local disk**:
+  - [x] `data/papers.json` → **Postgres** (Neon / Supabase free tier is fine)
+  - [x] PDFs → **object storage** (S3 or Cloudflare R2)
+  - [x] ChromaDB → either keep it with per-user metadata filtering on a persistent volume, or move to a hosted vector DB *(turned out to need neither — already one collection per paper, so registry-level ownership checks are sufficient; kept local since it's fully regenerable from the R2-stored PDF)*
 
 > DEPLOYMENT.md calls the storage refactor "a v2 problem" — that's correct for a demo. For a **paid** product it's a v1 problem: ephemeral-disk data loss is unacceptable when people pay.
 

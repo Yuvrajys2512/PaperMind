@@ -35,6 +35,7 @@ You will deploy these to **two different places**, then wire them together. This
 
 ---
 
+
 ## Part 2 — Key vocabulary
 
 Before we touch anything, here are the words you will see everywhere:
