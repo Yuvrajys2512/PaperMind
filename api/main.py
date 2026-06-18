@@ -25,6 +25,7 @@ from slowapi.util import get_remote_address
 from api.auth import get_current_user_id
 from api.ingestion_runner import run_ingestion_from_storage, regenerate_missing_collections
 from api.logger import generate_request_id
+from api.concurrency import get_chroma_client, paper_locked
 from api.storage import (
     create_paper_record,
     update_paper_status,
@@ -237,67 +238,68 @@ def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_cur
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
 
-    # Delete the PDF from R2 before the registry row. If this raises, the
-    # row is left in place (a recoverable "row exists, blob gone" state) —
-    # deleting the row first would risk an unreachable orphaned blob if the
-    # PDF delete then failed.
-    try:
-        delete_pdf(paper_id)
-    except Exception as exc:
-        log_operation(
-            "delete_pdf",
-            "error",
-            req_id=req_id,
-            user_id=user_id,
-            error=exc,
-            context={"paper_id": paper_id},
-        )
-        raise HTTPException(status_code=502, detail=f"Failed to delete PDF from storage: {exc}")
+    # Acquire exclusive lock on this paper to prevent concurrent deletes/queries
+    with paper_locked(paper_id):
+        # Delete the PDF from R2 before the registry row. If this raises, the
+        # row is left in place (a recoverable "row exists, blob gone" state) —
+        # deleting the row first would risk an unreachable orphaned blob if the
+        # PDF delete then failed.
+        try:
+            delete_pdf(paper_id)
+        except Exception as exc:
+            log_operation(
+                "delete_pdf",
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error=exc,
+                context={"paper_id": paper_id},
+            )
+            raise HTTPException(status_code=502, detail=f"Failed to delete PDF from storage: {exc}")
 
-    # Remove from registry
-    try:
-        delete_paper_record(paper_id)
-    except Exception as exc:
-        log_operation(
-            "delete_paper_record",
-            "error",
-            req_id=req_id,
-            user_id=user_id,
-            error=exc,
-            context={"paper_id": paper_id},
-        )
-        raise HTTPException(status_code=500, detail="Failed to delete paper from registry.")
+        # Remove from registry
+        try:
+            delete_paper_record(paper_id)
+        except Exception as exc:
+            log_operation(
+                "delete_paper_record",
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error=exc,
+                context={"paper_id": paper_id},
+            )
+            raise HTTPException(status_code=500, detail="Failed to delete paper from registry.")
 
-    # Drop ChromaDB collection
-    try:
-        import chromadb
-        chroma = chromadb.PersistentClient(path="data/chroma_db")
-        chroma.delete_collection(name=collection_name(paper_id))
-    except Exception as exc:
-        # The collection may legitimately be missing (ingestion never
-        # completed) — log it so a real failure is still visible.
-        log_operation(
-            "delete_chroma_collection",
-            "error",
-            req_id=req_id,
-            user_id=user_id,
-            error=exc,
-            context={"paper_id": paper_id},
-        )
+        # Drop ChromaDB collection using thread-safe client
+        try:
+            chroma = get_chroma_client()
+            chroma.delete_collection(name=collection_name(paper_id))
+        except Exception as exc:
+            # The collection may legitimately be missing (ingestion never
+            # completed) — log it so a real failure is still visible.
+            log_operation(
+                "delete_chroma_collection",
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error=exc,
+                context={"paper_id": paper_id},
+            )
 
-    # Invalidate the BM25 cache so a re-ingest of the same paper_id
-    # doesn't serve stale tokens.
-    try:
-        invalidate_bm25_cache(paper_id)
-    except Exception as exc:
-        log_operation(
-            "invalidate_bm25_cache",
-            "error",
-            req_id=req_id,
-            user_id=user_id,
-            error=exc,
-            context={"paper_id": paper_id},
-        )
+        # Invalidate the BM25 cache so a re-ingest of the same paper_id
+        # doesn't serve stale tokens.
+        try:
+            invalidate_bm25_cache(paper_id)
+        except Exception as exc:
+            log_operation(
+                "invalidate_bm25_cache",
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error=exc,
+                context={"paper_id": paper_id},
+            )
 
     log_operation(
         "delete_paper",
@@ -618,9 +620,14 @@ async def query_paper(req: QueryRequest, user_id: str = Depends(enforce_query_qu
             detail=f"Paper is not ready yet. Current status: {paper['status']}"
         )
 
+    # Acquire lock to prevent concurrent queries from corrupting Chroma state
+    def _locked_query():
+        with paper_locked(paper_id):
+            return answer_query(req.question, paper_id)
+
     try:
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, answer_query, req.question, paper_id),
+            loop.run_in_executor(None, _locked_query),
             timeout=60.0,
         )
     except asyncio.TimeoutError:
@@ -747,15 +754,19 @@ async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_q
         try:
             if is_compare:
                 def fn():
-                    return compare_papers(
-                        req.question, paper_id_a, paper_id_b, on_progress=on_progress,
-                    )
+                    # For comparison, lock both papers to prevent concurrent access
+                    with paper_locked(paper_id_a):
+                        with paper_locked(paper_id_b):
+                            return compare_papers(
+                                req.question, paper_id_a, paper_id_b, on_progress=on_progress,
+                            )
                 timeout = 120.0
             else:
                 def fn():
-                    return answer_query(
-                        req.question, paper_id, request_id=req_id, on_progress=on_progress,
-                    )
+                    with paper_locked(paper_id):
+                        return answer_query(
+                            req.question, paper_id, request_id=req_id, on_progress=on_progress,
+                        )
                 timeout = 60.0
 
             result = await asyncio.wait_for(
