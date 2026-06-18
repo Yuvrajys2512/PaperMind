@@ -15,7 +15,7 @@ import threading
 
 from ingestion.pipeline import answer_query, compare_papers
 from ingestion.rewriter import rewrite_text
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -24,6 +24,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from api.auth import get_current_user_id
 from api.ingestion_runner import run_ingestion_from_storage, regenerate_missing_collections
+from api.logger import generate_request_id
 from api.storage import (
     create_paper_record,
     update_paper_status,
@@ -51,6 +52,7 @@ from discovery.search  import search_papers
 # storage/billing, which fail loud). sentry-sdk auto-instruments FastAPI when
 # initialized early, so unhandled route exceptions are captured automatically.
 import sentry_sdk
+from api.logger import log_operation
 
 _sentry_dsn = os.getenv("SENTRY_DSN")
 if _sentry_dsn:
@@ -79,6 +81,19 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+
+# Middleware to attach request_id to Sentry scope for error tracing.
+@app.middleware("http")
+async def attach_request_id(request, call_next):
+    req_id = generate_request_id()
+    request.state.req_id = req_id
+    if _sentry_dsn:
+        sentry_sdk.set_tag("request_id", req_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = req_id
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -110,10 +125,14 @@ def health_check():
 
 @app.post("/upload")
 async def upload_paper(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: str = Depends(enforce_paper_quota),
 ):
+    req_id = getattr(request.state, 'req_id', 'unknown')
+    t0 = time.monotonic()
+
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
@@ -142,18 +161,45 @@ async def upload_paper(
     except HTTPException:
         os.remove(temp_path)
         raise
-    except Exception:
-        os.remove(temp_path)
+    except Exception as exc:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        log_operation(
+            "upload_read_file",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"filename": file.filename},
+        )
         raise HTTPException(status_code=400, detail="Could not read the uploaded file.")
 
     paper_id = create_paper_record(file.filename, user_id)
     try:
         upload_pdf(paper_id, temp_path)
+        log_operation(
+            "upload_pdf",
+            "success",
+            req_id=req_id,
+            user_id=user_id,
+            duration_ms=round((time.monotonic() - t0) * 1000),
+            context={"paper_id": paper_id, "filename": file.filename},
+        )
     except Exception as exc:
         update_paper_status(paper_id, "failed", error=f"Upload to storage failed: {exc}")
+        log_operation(
+            "upload_pdf",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id, "filename": file.filename},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
         raise HTTPException(status_code=502, detail="Failed to store the uploaded PDF.")
     finally:
-        os.remove(temp_path)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
     background_tasks.add_task(run_ingestion_from_storage, paper_id)
 
@@ -184,7 +230,9 @@ def get_usage(user_id: str = Depends(get_current_user_id)):
 
 
 @app.delete("/papers/{paper_id}")
-def delete_paper(paper_id: str, user_id: str = Depends(get_current_user_id)):
+def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_current_user_id)):
+    req_id = getattr(request.state, 'req_id', 'unknown')
+
     paper = get_owned_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
@@ -196,10 +244,29 @@ def delete_paper(paper_id: str, user_id: str = Depends(get_current_user_id)):
     try:
         delete_pdf(paper_id)
     except Exception as exc:
+        log_operation(
+            "delete_pdf",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+        )
         raise HTTPException(status_code=502, detail=f"Failed to delete PDF from storage: {exc}")
 
     # Remove from registry
-    delete_paper_record(paper_id)
+    try:
+        delete_paper_record(paper_id)
+    except Exception as exc:
+        log_operation(
+            "delete_paper_record",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+        )
+        raise HTTPException(status_code=500, detail="Failed to delete paper from registry.")
 
     # Drop ChromaDB collection
     try:
@@ -209,14 +276,36 @@ def delete_paper(paper_id: str, user_id: str = Depends(get_current_user_id)):
     except Exception as exc:
         # The collection may legitimately be missing (ingestion never
         # completed) — log it so a real failure is still visible.
-        print(f"[delete] Chroma collection drop skipped for {paper_id}: {exc}")
+        log_operation(
+            "delete_chroma_collection",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+        )
 
     # Invalidate the BM25 cache so a re-ingest of the same paper_id
     # doesn't serve stale tokens.
     try:
         invalidate_bm25_cache(paper_id)
     except Exception as exc:
-        print(f"[delete] BM25 cache invalidation failed for {paper_id}: {exc}")
+        log_operation(
+            "invalidate_bm25_cache",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+        )
+
+    log_operation(
+        "delete_paper",
+        "success",
+        req_id=req_id,
+        user_id=user_id,
+        context={"paper_id": paper_id},
+    )
 
     return {"deleted": paper_id}
 
@@ -240,6 +329,7 @@ def serve_paper_pdf(paper_id: str, user_id: str = Depends(get_current_user_id)):
 
 @app.get("/papers/{paper_id}/glossary")
 async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id)):
+    t0 = time.monotonic()
     paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
@@ -273,13 +363,39 @@ async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id
 
     try:
         terms = await asyncio.wait_for(loop.run_in_executor(None, _extract), timeout=40.0)
+        log_operation(
+            "extract_glossary",
+            "success",
+            user_id=user_id,
+            context={"paper_id": paper_id},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
         return {"terms": terms}
+    except asyncio.TimeoutError:
+        log_operation(
+            "extract_glossary",
+            "error",
+            user_id=user_id,
+            error="timeout",
+            context={"paper_id": paper_id},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
+        raise HTTPException(status_code=504, detail="Glossary extraction timed out.")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Glossary extraction failed: {exc}")
+        log_operation(
+            "extract_glossary",
+            "error",
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
+        raise HTTPException(status_code=500, detail="Glossary extraction failed.")
 
 
 @app.get("/papers/{paper_id}/recommendations")
 async def get_recommendations(paper_id: str, user_id: str = Depends(get_current_user_id)):
+    t0 = time.monotonic()
     paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
@@ -311,8 +427,26 @@ async def get_recommendations(paper_id: str, user_id: str = Depends(get_current_
 
     try:
         queries = await asyncio.wait_for(loop.run_in_executor(None, _get_queries), timeout=20.0)
+    except asyncio.TimeoutError:
+        log_operation(
+            "extract_recommendations",
+            "error",
+            user_id=user_id,
+            error="timeout",
+            context={"paper_id": paper_id},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
+        raise HTTPException(status_code=504, detail="Recommendation extraction timed out.")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not extract topics: {exc}")
+        log_operation(
+            "extract_recommendations",
+            "error",
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
+        raise HTTPException(status_code=500, detail="Could not extract topics.")
 
     seen, results = set(), []
     for q in queries[:3]:
@@ -324,9 +458,23 @@ async def get_recommendations(paper_id: str, user_id: str = Depends(get_current_
                     seen.add(rid)
                     r["search_query"] = q
                     results.append(r)
-        except Exception:
+        except Exception as exc:
+            log_operation(
+                "search_related_papers",
+                "error",
+                user_id=user_id,
+                error=exc,
+                context={"paper_id": paper_id, "query": q},
+            )
             continue
 
+    log_operation(
+        "extract_recommendations",
+        "success",
+        user_id=user_id,
+        context={"paper_id": paper_id, "results_count": len(results)},
+        duration_ms=round((time.monotonic() - t0) * 1000),
+    )
     return {"results": results[:12], "queries": queries}
 
 
@@ -337,6 +485,7 @@ class RewriteRequest(BaseModel):
 
 @app.post("/rewrite")
 async def rewrite(request: RewriteRequest, user_id: str = Depends(get_current_user_id)):
+    t0 = time.monotonic()
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
     if request.mode not in ("academic", "plain", "concise"):
@@ -348,10 +497,33 @@ async def rewrite(request: RewriteRequest, user_id: str = Depends(get_current_us
             loop.run_in_executor(None, rewrite_text, request.text, request.mode),
             timeout=30.0,
         )
+        log_operation(
+            "rewrite_text",
+            "success",
+            user_id=user_id,
+            context={"mode": request.mode, "text_length": len(request.text)},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
     except asyncio.TimeoutError:
+        log_operation(
+            "rewrite_text",
+            "error",
+            user_id=user_id,
+            error="timeout",
+            context={"mode": request.mode},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
         raise HTTPException(status_code=504, detail="Rewrite timed out.")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Rewrite failed: {exc}")
+        log_operation(
+            "rewrite_text",
+            "error",
+            user_id=user_id,
+            error=exc,
+            context={"mode": request.mode},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
+        raise HTTPException(status_code=500, detail="Rewrite failed.")
 
     return {"result": result, "mode": request.mode}
 
@@ -363,14 +535,14 @@ class QueryRequest(BaseModel):
 
 
 @app.post("/query")
-async def query_paper(request: QueryRequest, user_id: str = Depends(enforce_query_quota)):
+async def query_paper(req: QueryRequest, user_id: str = Depends(enforce_query_quota)):
     req_id = generate_request_id()
     loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
 
     # ── Multi-paper comparison ────────────────────────────────────────────
-    if request.paper_ids and len(request.paper_ids) == 2:
-        paper_id_a, paper_id_b = request.paper_ids[0], request.paper_ids[1]
+    if req.paper_ids and len(req.paper_ids) == 2:
+        paper_id_a, paper_id_b = req.paper_ids[0], req.paper_ids[1]
 
         for pid in (paper_id_a, paper_id_b):
             p = get_readable_paper(pid, user_id)
@@ -381,17 +553,37 @@ async def query_paper(request: QueryRequest, user_id: str = Depends(enforce_quer
 
         try:
             result = await asyncio.wait_for(
-                loop.run_in_executor(None, compare_papers, request.question, paper_id_a, paper_id_b),
+                loop.run_in_executor(None, compare_papers, req.question, paper_id_a, paper_id_b),
                 timeout=120.0,
             )
         except asyncio.TimeoutError:
+            log_operation(
+                "compare_papers",
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error="timeout",
+                context={"paper_id_a": paper_id_a, "paper_id_b": paper_id_b},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
             raise HTTPException(status_code=504, detail="Comparison timed out after 120 seconds.")
+        except Exception as exc:
+            log_operation(
+                "compare_papers",
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error=exc,
+                context={"paper_id_a": paper_id_a, "paper_id_b": paper_id_b},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            raise HTTPException(status_code=500, detail="Comparison failed.")
 
         duration_ms = round((time.monotonic() - t0) * 1000)
         log_query(
             req_id=req_id,
             paper_id=f"{paper_id_a[:4]}+{paper_id_b[:4]}",
-            question=request.question,
+            question=req.question,
             duration_ms=duration_ms,
             confidence=result.get("confidence", 0),
             attempts=result.get("attempts", 1),
@@ -413,7 +605,7 @@ async def query_paper(request: QueryRequest, user_id: str = Depends(enforce_quer
         return result
 
     # ── Single-paper query ────────────────────────────────────────────────
-    paper_id = request.paper_id or (request.paper_ids[0] if request.paper_ids else "")
+    paper_id = req.paper_id or (req.paper_ids[0] if req.paper_ids else "")
     if not paper_id:
         raise HTTPException(status_code=400, detail="Provide paper_id or paper_ids.")
 
@@ -428,17 +620,37 @@ async def query_paper(request: QueryRequest, user_id: str = Depends(enforce_quer
 
     try:
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, answer_query, request.question, paper_id),
+            loop.run_in_executor(None, answer_query, req.question, paper_id),
             timeout=60.0,
         )
     except asyncio.TimeoutError:
+        log_operation(
+            "answer_query",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error="timeout",
+            context={"paper_id": paper_id},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
         raise HTTPException(status_code=504, detail="Query timed out after 60 seconds.")
+    except Exception as exc:
+        log_operation(
+            "answer_query",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
+        raise HTTPException(status_code=500, detail="Query failed.")
 
     duration_ms = round((time.monotonic() - t0) * 1000)
     log_query(
         req_id=req_id,
         paper_id=paper_id,
-        question=request.question,
+        question=req.question,
         duration_ms=duration_ms,
         confidence=result.get("confidence", 0),
         attempts=result.get("attempts", 1),
@@ -496,18 +708,18 @@ def _make_progress_pusher(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop)
 
 
 @app.post("/query/stream")
-async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_query_quota)):
+async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_quota)):
     req_id = generate_request_id()
     loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
     queue: asyncio.Queue = asyncio.Queue()
 
-    is_compare = bool(request.paper_ids and len(request.paper_ids) == 2)
+    is_compare = bool(req.paper_ids and len(req.paper_ids) == 2)
 
     # Validate inputs the same way /query does — bail fast with HTTPException
     # before opening the event stream, so the client gets a real 4xx.
     if is_compare:
-        paper_id_a, paper_id_b = request.paper_ids[0], request.paper_ids[1]
+        paper_id_a, paper_id_b = req.paper_ids[0], req.paper_ids[1]
         for pid in (paper_id_a, paper_id_b):
             p = get_readable_paper(pid, user_id)
             if not p:
@@ -516,7 +728,7 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_que
                 raise HTTPException(status_code=400, detail=f"Paper {pid} is not ready yet.")
         log_paper_id = f"{paper_id_a[:4]}+{paper_id_b[:4]}"
     else:
-        paper_id = request.paper_id or (request.paper_ids[0] if request.paper_ids else "")
+        paper_id = req.paper_id or (req.paper_ids[0] if req.paper_ids else "")
         if not paper_id:
             raise HTTPException(status_code=400, detail="Provide paper_id or paper_ids.")
         paper = get_readable_paper(paper_id, user_id)
@@ -536,13 +748,13 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_que
             if is_compare:
                 def fn():
                     return compare_papers(
-                        request.question, paper_id_a, paper_id_b, on_progress=on_progress,
+                        req.question, paper_id_a, paper_id_b, on_progress=on_progress,
                     )
                 timeout = 120.0
             else:
                 def fn():
                     return answer_query(
-                        request.question, paper_id, request_id=req_id, on_progress=on_progress,
+                        req.question, paper_id, request_id=req_id, on_progress=on_progress,
                     )
                 timeout = 60.0
 
@@ -552,10 +764,28 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_que
             )
             await queue.put(("done", result))
         except asyncio.TimeoutError:
+            log_operation(
+                "query_stream" if not is_compare else "compare_stream",
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error="timeout",
+                context={"paper_id": log_paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
             await queue.put(("error", {
                 "message": "Query timed out. The paper may be unusually large or the LLM providers slow.",
             }))
         except Exception as exc:
+            log_operation(
+                "query_stream" if not is_compare else "compare_stream",
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error=exc,
+                context={"paper_id": log_paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
             await queue.put(("error", {"message": f"Pipeline failed: {exc}"}))
 
     asyncio.create_task(run_pipeline())
@@ -578,7 +808,7 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_que
                 log_query(
                     req_id=req_id,
                     paper_id=log_paper_id,
-                    question=request.question,
+                    question=req.question,
                     duration_ms=round((time.monotonic() - t0) * 1000),
                     confidence=0,
                     attempts=0,
@@ -592,7 +822,7 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_que
                 log_query(
                     req_id=req_id,
                     paper_id=log_paper_id,
-                    question=request.question,
+                    question=req.question,
                     duration_ms=round((time.monotonic() - t0) * 1000),
                     confidence=result.get("confidence", 0),
                     attempts=result.get("attempts", 1),

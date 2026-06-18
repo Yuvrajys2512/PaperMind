@@ -6,6 +6,40 @@ The core pipeline is genuinely differentiated, and [DEPLOYMENT.md](DEPLOYMENT.md
 
 ---
 
+## ▶ START HERE — pick up next session (as of 2026-06-18)
+
+**The whole build is done.** Launch Checklist §1–§5 are code-complete and verified. The 3 sample papers (Attention, BERT, RAG) are seeded live and were end-to-end verified (read-only + quota-exempt + queryable with cited answers). **Everything left is manual deploy/ops — there is no more feature code to write before launch.**
+
+### 0. Commit the working tree first
+The last session's work is **uncommitted**. Suggested split (matches the repo's commit style; no AI attribution):
+```
+add public landing page + ToS/Privacy pages at #/terms,#/privacy
+add preloaded sample papers (shared read-only demo set); fix duplicate chunk-ID ingestion crash
+```
+Notable change to keep in the commit: **`ingestion/embedder.py`** — chunk IDs were a bare `md5(text)`, so two identical chunks in one paper crashed the *entire* ingestion (`DuplicateIDError`). Now prefixed with the chunk's ordinal position. This is a real fix for **all** uploads, not just demo seeding.
+
+### 1. Then the deploy (the actual launch path) — follow [DEPLOYMENT.md](DEPLOYMENT.md)
+Do them in this order:
+
+1. **(Optional but recommended) Local Docker smoke test** — `docker build -t papermind .` → `docker run --rm -p 7860:7860 --env-file .env papermind` → `curl localhost:7860/health`. Catches a deploy-breaker before pushing to HF. (Claude can run this if Docker Desktop is up.)
+2. **Rotate every API key** (DEPLOYMENT.md Part 3) — they were pasted into chats during dev; treat as burned.
+3. **Backend → Hugging Face Spaces** (Docker) — push repo, set the backend secrets, confirm `/health`. (Part 5)
+4. **Frontend → Vercel** — root dir `frontend`, set `VITE_API_URL` + `VITE_CLERK_PUBLISHABLE_KEY`, deploy, add custom domain. (Part 6)
+5. **Wire the cross-service settings** — `ALLOWED_ORIGINS` / `PAPERMIND_FRONTEND_URL` on HF; register the **production Stripe webhook** + its signing secret; add the domain in Clerk; UptimeRobot keep-warm ping. (Part 7)
+
+> **DEPLOYMENT.md env reference was corrected this session** to match the actual code (it predated §5). It now lists `GROQ_API_KEY_2`, `SENTRY_DSN`/`SENTRY_ENVIRONMENT`, `SEMANTIC_SCHOLAR_API_KEY`, `PAPERMIND_DEMO_USER_ID`, and the frontend `VITE_SENTRY_*`/`VITE_POSTHOG_*`; and dropped `OPENAI_API_KEY` / `VLM_GEMINI_API_KEY` / `GEMINI_API_KEY_2`, which the code never reads. Trust the doc's env tables now.
+
+### 2. The remaining manual setup tasks (can happen alongside / after deploy)
+- [ ] **Stripe test-mode e2e** — create the $9/mo Price, `stripe listen`, complete Checkout with `4242…`. Needs your test keys. (See LAUNCH_DOCUMENT.md Part 3.)
+- [ ] **Create Sentry + PostHog projects** and add the DSN/keys (HF secret `SENTRY_DSN`; Vercel `VITE_SENTRY_DSN`/`VITE_POSTHOG_KEY`/`VITE_POSTHOG_HOST`). Until then observability is a no-op (fail-open by design).
+- [ ] **Fill the legal placeholders** — greppable `[[OPERATOR]]` / `[[JURISDICTION]]` / `[[CONTACT_EMAIL]]` in `frontend/src/legal/content.js`, then have a lawyer review the ToS/Privacy.
+- [ ] **Add `frontend/public/demo.gif`** — the landing page shows a labelled placeholder until it exists (no code change needed).
+
+### Other open track (not launch-blocking)
+- **QASPER eval / workshop-paper** — living roadmap in `research/to_do.md`. Pending: wire `generator.py` `PAPERMIND_GEN_MODEL`, a clean grader re-run, and the broken Cerebras provider (`NotFoundError`).
+
+---
+
 ## 1. Multi-tenancy — the hard blocker
 
 Right now PaperMind is a single-user app. `api/storage.py` writes everything to one shared `data/papers.json` and one `data/papers/` folder, and ChromaDB has one shared index. Deployed as-is, every visitor would see every other visitor's uploaded papers — and could delete them.

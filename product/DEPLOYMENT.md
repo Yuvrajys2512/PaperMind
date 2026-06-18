@@ -41,7 +41,9 @@ These are live services from §1–§3. You already have accounts/keys for them 
 | Registry DB | Neon Postgres | `DATABASE_URL` |
 | PDF storage | Cloudflare R2 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` |
 | Billing | Stripe | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET` |
-| LLM providers | Groq/Gemini/Mistral/Cerebras/OpenAI | `GROQ_API_KEY`, `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `VLM_GEMINI_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`, `OPENAI_API_KEY` |
+| LLM providers | Groq/Gemini/Mistral/Cerebras | `GROQ_API_KEY`, `GROQ_API_KEY_2`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY` (the chain tries them in order; at least one is required) |
+| Error tracking (§5) | Sentry | `SENTRY_DSN`, `SENTRY_ENVIRONMENT` (optional — no-op if unset) |
+| Paper discovery | Semantic Scholar | `SEMANTIC_SCHOLAR_API_KEY` (optional — works unauthenticated but rate-limited) |
 | Frontend origin (CORS + Stripe redirects) | — | `ALLOWED_ORIGINS`, `PAPERMIND_FRONTEND_URL` |
 | Frontend → backend URL | — | `VITE_API_URL` (frontend, build-time) |
 
@@ -53,7 +55,7 @@ Vector search (ChromaDB) stays local on the backend and regenerates from R2 — 
 
 Every key in `.env` (all the LLM keys, Clerk, Neon, R2, Stripe) was pasted into a chat at some point during development. **Treat them as burned.** Before going live, regenerate each one in its provider's dashboard and update your local `.env`:
 
-- Gemini (×3: `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `VLM_GEMINI_API_KEY`), Groq, OpenAI, Cerebras, Mistral
+- LLM keys: `GROQ_API_KEY`, `GROQ_API_KEY_2`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`
 - Clerk: rotate the secret/instance if exposed
 - Neon: rotate the database password (new `DATABASE_URL`)
 - R2: roll the access key pair
@@ -152,9 +154,11 @@ After both halves are live and you know your domain, finish the connections:
 
 ## Env var reference
 
-**Backend (HF Space secrets):** `GROQ_API_KEY`, `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `VLM_GEMINI_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`, `OPENAI_API_KEY`, `CLERK_ISSUER`, `DATABASE_URL`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`, `ALLOWED_ORIGINS`, `PAPERMIND_FRONTEND_URL`. Optional: `PAPERMIND_MAX_UPLOAD_MB` (25), `PAPERMIND_REGENERATE_ON_STARTUP` (1), `PAPERMIND_FREE_MAX_PAPERS` (3), `PAPERMIND_FREE_MAX_QUERIES_PER_MONTH` (20).
+**Backend (HF Space secrets) — required:** `GROQ_API_KEY`, `GROQ_API_KEY_2`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY` (at least one LLM key), `CLERK_ISSUER`, `DATABASE_URL`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`, `ALLOWED_ORIGINS`, `PAPERMIND_FRONTEND_URL`.
 
-**Frontend (Vercel, build-time):** `VITE_API_URL`, `VITE_CLERK_PUBLISHABLE_KEY`.
+**Backend — optional:** `SENTRY_DSN` + `SENTRY_ENVIRONMENT` (error tracking; no-op if unset), `SEMANTIC_SCHOLAR_API_KEY` (discovery rate limits), `PAPERMIND_DEMO_USER_ID` (owner of the shared sample papers; default `__papermind_demo__`), `PAPERMIND_MAX_UPLOAD_MB` (25), `PAPERMIND_REGENERATE_ON_STARTUP` (1), `PAPERMIND_FREE_MAX_PAPERS` (3), `PAPERMIND_FREE_MAX_QUERIES_PER_MONTH` (20).
+
+**Frontend (Vercel, build-time) — required:** `VITE_API_URL`, `VITE_CLERK_PUBLISHABLE_KEY`. **Optional (§5):** `VITE_SENTRY_DSN`, `VITE_POSTHOG_KEY`, `VITE_POSTHOG_HOST`.
 
 ---
 

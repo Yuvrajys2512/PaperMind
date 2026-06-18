@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from api.auth import get_current_user_id
 from api.storage import _pool
 from api.usage import set_user_tier
+from api.logger import log_operation
 
 load_dotenv()
 
@@ -151,7 +152,17 @@ def _period_end_from(subscription: dict) -> datetime | None:
 
 @router.post("/checkout")
 def create_checkout(user_id: str = Depends(get_current_user_id)):
-    customer_id = _get_or_create_customer(user_id)
+    try:
+        customer_id = _get_or_create_customer(user_id)
+    except Exception as exc:
+        log_operation(
+            "create_stripe_customer",
+            "error",
+            user_id=user_id,
+            error=exc,
+        )
+        raise HTTPException(status_code=502, detail="Could not create billing account.")
+
     try:
         session = stripe.checkout.Session.create(
             mode="subscription",
@@ -162,8 +173,21 @@ def create_checkout(user_id: str = Depends(get_current_user_id)):
             client_reference_id=user_id,
             subscription_data={"metadata": {"user_id": user_id}},
         )
+        log_operation(
+            "create_checkout_session",
+            "success",
+            user_id=user_id,
+            context={"customer_id": customer_id},
+        )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not start checkout: {exc}")
+        log_operation(
+            "create_checkout_session",
+            "error",
+            user_id=user_id,
+            error=exc,
+            context={"customer_id": customer_id},
+        )
+        raise HTTPException(status_code=502, detail="Could not start checkout.")
     return {"url": session["url"]}
 
 
@@ -177,8 +201,21 @@ def create_portal(user_id: str = Depends(get_current_user_id)):
             customer=customer_id,
             return_url=f"{FRONTEND_URL}/?billing=portal",
         )
+        log_operation(
+            "create_portal_session",
+            "success",
+            user_id=user_id,
+            context={"customer_id": customer_id},
+        )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not open billing portal: {exc}")
+        log_operation(
+            "create_portal_session",
+            "error",
+            user_id=user_id,
+            error=exc,
+            context={"customer_id": customer_id},
+        )
+        raise HTTPException(status_code=502, detail="Could not open billing portal.")
     return {"url": session["url"]}
 
 
@@ -190,34 +227,66 @@ async def stripe_webhook(request: Request):
     sig_header = request.headers.get("Stripe-Signature", "")
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
-    except Exception:
+    except Exception as exc:
+        log_operation(
+            "stripe_webhook",
+            "error",
+            error=exc,
+            context={"reason": "invalid_signature"},
+        )
         raise HTTPException(status_code=400, detail="Invalid Stripe signature or payload.")
 
     event_type = event["type"]
     obj = event["data"]["object"]
 
-    if event_type == "checkout.session.completed":
-        # First subscription: the session carries our user_id and the new
-        # customer/subscription ids.
-        user_id = obj.get("client_reference_id")
-        customer_id = obj.get("customer")
-        if user_id and customer_id:
-            _record_subscription(
-                user_id, customer_id, obj.get("subscription"), "active", None
-            )
-            set_user_tier(user_id, "pro")
+    try:
+        if event_type == "checkout.session.completed":
+            # First subscription: the session carries our user_id and the new
+            # customer/subscription ids.
+            user_id = obj.get("client_reference_id")
+            customer_id = obj.get("customer")
+            if user_id and customer_id:
+                _record_subscription(
+                    user_id, customer_id, obj.get("subscription"), "active", None
+                )
+                set_user_tier(user_id, "pro")
+                log_operation(
+                    "stripe_checkout_completed",
+                    "success",
+                    user_id=user_id,
+                    context={"customer_id": customer_id, "event_id": event.get("id")},
+                )
 
-    elif event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
-        customer_id = obj.get("customer")
-        # Prefer the user_id we stamped into subscription metadata; fall back to
-        # our customer→user mapping for events that predate it.
-        user_id = (obj.get("metadata") or {}).get("user_id") or _user_id_for_customer(customer_id)
-        if user_id and customer_id:
-            status = "canceled" if event_type.endswith("deleted") else obj.get("status")
-            _record_subscription(
-                user_id, customer_id, obj.get("id"), status, _period_end_from(obj)
-            )
-            set_user_tier(user_id, "pro" if status in _ACTIVE_STATUSES else "free")
+        elif event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
+            customer_id = obj.get("customer")
+            # Prefer the user_id we stamped into subscription metadata; fall back to
+            # our customer→user mapping for events that predate it.
+            user_id = (obj.get("metadata") or {}).get("user_id") or _user_id_for_customer(customer_id)
+            if user_id and customer_id:
+                status = "canceled" if event_type.endswith("deleted") else obj.get("status")
+                _record_subscription(
+                    user_id, customer_id, obj.get("id"), status, _period_end_from(obj)
+                )
+                new_tier = "pro" if status in _ACTIVE_STATUSES else "free"
+                set_user_tier(user_id, new_tier)
+                log_operation(
+                    "stripe_subscription_updated",
+                    "success",
+                    user_id=user_id,
+                    context={
+                        "event_type": event_type,
+                        "subscription_status": status,
+                        "tier": new_tier,
+                        "event_id": event.get("id"),
+                    },
+                )
+    except Exception as exc:
+        log_operation(
+            "stripe_webhook",
+            "error",
+            error=exc,
+            context={"event_type": event_type, "event_id": event.get("id")},
+        )
 
     # Acknowledge every verified event (handled or not) so Stripe stops retrying.
     return {"received": True}
