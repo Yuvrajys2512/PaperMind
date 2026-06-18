@@ -14,6 +14,13 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not configured.")
 
+# Preloaded sample papers are owned by one fixed system user. They're shown
+# read-only to every signed-in user and are excluded from per-user quotas
+# (quota counting only ever looks at a real user's own papers). Seed them with
+# scripts/seed_demo_papers.py. The default is namespaced so it can never
+# collide with a real Clerk user id.
+DEMO_USER_ID = os.getenv("PAPERMIND_DEMO_USER_ID", "__papermind_demo__")
+
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
@@ -104,7 +111,10 @@ def get_owned_paper(paper_id: str, user_id: str) -> dict | None:
 
 
 def list_papers(user_id: str) -> list:
-    """Returns user_id's paper records as a list, newest first."""
+    """Returns user_id's OWN paper records as a list, newest first. Deliberately
+    excludes the shared demo set — quota enforcement counts this, so demo papers
+    must never inflate a user's paper count. Use list_demo_papers() / the
+    /papers endpoint for the full visible library."""
     with _pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
@@ -112,6 +122,32 @@ def list_papers(user_id: str) -> list:
                 (user_id,),
             )
             return cur.fetchall()
+
+
+def list_demo_papers() -> list:
+    """Returns the shared, read-only sample papers (owned by DEMO_USER_ID),
+    newest first. Shown to every user so a brand-new account has something to
+    query immediately; never counted against any user's quota."""
+    with _pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT * FROM papers WHERE user_id = %s ORDER BY uploaded_at DESC",
+                (DEMO_USER_ID,),
+            )
+            return cur.fetchall()
+
+
+def get_readable_paper(paper_id: str, user_id: str) -> dict | None:
+    """Returns the paper if user_id may READ it — i.e. they own it, or it's a
+    shared demo paper. This is the gate for query/status/pdf/glossary/etc.
+    Write actions (delete) keep using get_owned_paper, so a user can never
+    mutate the shared demo set."""
+    paper = get_paper(paper_id)
+    if not paper:
+        return None
+    if paper.get("user_id") in (user_id, DEMO_USER_ID):
+        return paper
+    return None
 
 
 def list_ready_paper_ids() -> list[str]:

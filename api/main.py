@@ -28,7 +28,10 @@ from api.storage import (
     create_paper_record,
     update_paper_status,
     get_owned_paper,
+    get_readable_paper,
     list_papers,
+    list_demo_papers,
+    DEMO_USER_ID,
     upload_pdf,
     get_pdf_stream,
     delete_pdf,
@@ -159,7 +162,7 @@ async def upload_paper(
 
 @app.get("/status/{paper_id}")
 def get_status(paper_id: str, user_id: str = Depends(get_current_user_id)):
-    paper = get_owned_paper(paper_id, user_id)
+    paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     return paper
@@ -167,7 +170,12 @@ def get_status(paper_id: str, user_id: str = Depends(get_current_user_id)):
 
 @app.get("/papers")
 def get_all_papers(user_id: str = Depends(get_current_user_id)):
-    return list_papers(user_id)
+    """The user's own papers (newest first) followed by the shared, read-only
+    demo set. `is_demo` lets the frontend badge them and hide their delete
+    control — they're quota-exempt and not owned by the requester."""
+    own = [{**p, "is_demo": False} for p in list_papers(user_id)]
+    demo = [{**p, "is_demo": True} for p in list_demo_papers()]
+    return own + demo
 
 
 @app.get("/usage")
@@ -215,7 +223,7 @@ def delete_paper(paper_id: str, user_id: str = Depends(get_current_user_id)):
 
 @app.get("/papers/{paper_id}/pdf")
 def serve_paper_pdf(paper_id: str, user_id: str = Depends(get_current_user_id)):
-    paper = get_owned_paper(paper_id, user_id)
+    paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     try:
@@ -232,7 +240,7 @@ def serve_paper_pdf(paper_id: str, user_id: str = Depends(get_current_user_id)):
 
 @app.get("/papers/{paper_id}/glossary")
 async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id)):
-    paper = get_owned_paper(paper_id, user_id)
+    paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     if paper["status"] != "ready":
@@ -272,7 +280,7 @@ async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id
 
 @app.get("/papers/{paper_id}/recommendations")
 async def get_recommendations(paper_id: str, user_id: str = Depends(get_current_user_id)):
-    paper = get_owned_paper(paper_id, user_id)
+    paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     if paper["status"] != "ready":
@@ -365,7 +373,7 @@ async def query_paper(request: QueryRequest, user_id: str = Depends(enforce_quer
         paper_id_a, paper_id_b = request.paper_ids[0], request.paper_ids[1]
 
         for pid in (paper_id_a, paper_id_b):
-            p = get_owned_paper(pid, user_id)
+            p = get_readable_paper(pid, user_id)
             if not p:
                 raise HTTPException(status_code=404, detail=f"Paper {pid} not found.")
             if p["status"] != "ready":
@@ -409,7 +417,7 @@ async def query_paper(request: QueryRequest, user_id: str = Depends(enforce_quer
     if not paper_id:
         raise HTTPException(status_code=400, detail="Provide paper_id or paper_ids.")
 
-    paper = get_owned_paper(paper_id, user_id)
+    paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
     if paper["status"] != "ready":
@@ -501,7 +509,7 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_que
     if is_compare:
         paper_id_a, paper_id_b = request.paper_ids[0], request.paper_ids[1]
         for pid in (paper_id_a, paper_id_b):
-            p = get_owned_paper(pid, user_id)
+            p = get_readable_paper(pid, user_id)
             if not p:
                 raise HTTPException(status_code=404, detail=f"Paper {pid} not found.")
             if p["status"] != "ready":
@@ -511,7 +519,7 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(enforce_que
         paper_id = request.paper_id or (request.paper_ids[0] if request.paper_ids else "")
         if not paper_id:
             raise HTTPException(status_code=400, detail="Provide paper_id or paper_ids.")
-        paper = get_owned_paper(paper_id, user_id)
+        paper = get_readable_paper(paper_id, user_id)
         if not paper:
             raise HTTPException(status_code=404, detail="Paper not found.")
         if paper["status"] != "ready":

@@ -438,9 +438,13 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
         <span className="text-[11px] text-gray-700" style={{ fontFamily: 'var(--font-mono)' }}>
           PaperMind
         </span>
-        <span className="text-[11px] text-gray-700">
-          Cites the exact section · evidence-graded · open source
-        </span>
+        <div className="flex items-center gap-4">
+          <a href="#/terms" className="text-[11px] text-gray-700 hover:text-gray-500 transition-colors">Terms</a>
+          <a href="#/privacy" className="text-[11px] text-gray-700 hover:text-gray-500 transition-colors">Privacy</a>
+          <span className="text-[11px] text-gray-700 hidden sm:inline">
+            Cites the exact section · evidence-graded
+          </span>
+        </div>
       </div>
 
       <style>{`

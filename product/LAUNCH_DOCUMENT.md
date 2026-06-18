@@ -232,7 +232,7 @@ New environment variables (optional, both have defaults): `PAPERMIND_FREE_MAX_PA
 
 **§4 (deployment & hardening)**: code-complete and mechanically verified — see Part 4 below. The live deploy (HF Space + Vercel + domain) is manual.
 
-**§5 (product & legal minimum)**: in progress — observability (Sentry + PostHog) done, see Part 5. Remaining: preloaded sample papers, landing page, ToS/Privacy Policy.
+**§5 (product & legal minimum)**: nearly done — observability (Sentry + PostHog), the public landing page, and the ToS/Privacy Policy are all built and verified, see Part 5. Only **preloaded sample papers** remain (design settled, implementation deferred).
 
 ---
 
@@ -396,5 +396,19 @@ New files: `api/uploads.py`, `Dockerfile`, `.dockerignore`. Modified: `api/main.
 
 New files: `frontend/src/analytics.js`. Modified: `api/main.py` (guarded Sentry init), `requirements.txt` (`sentry-sdk[fastapi]`), `frontend/src/main.jsx` (Sentry + analytics init + ErrorBoundary), `frontend/src/App.jsx` (identify/reset), `frontend/src/pages/{UploadPage,ChatPage,BillingPage}.jsx` (funnel events), `frontend/package.json` (`@sentry/react`, `posthog-js`). New env vars: `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, and frontend `VITE_SENTRY_DSN`/`VITE_POSTHOG_KEY`/`VITE_POSTHOG_HOST`.
 
-## 31. Still to come in §5
-Preloaded sample papers (30-second first-value), a landing page with a demo GIF, and Terms of Service + Privacy Policy (upload-rights responsibility on the user).
+## 31. Landing page + legal pages (done)
+
+The second §5 slice was the public front door and the legal minimum. Two product decisions were made with the user up front: signed-out visitors should hit a **landing page first** (CTA → Clerk), not the bare sign-in box; and preloaded sample papers should be a **shared, system-owned demo set** (read-only, quota-exempt, ingested once) rather than seeded per user — but that one was **deferred** (only its design was settled), so this slice shipped the landing page and the legal pages.
+
+**Routing, without a router.** PaperMind has no `react-router` — navigation is plain page-state in `App.jsx`. Rather than pull one in for two static pages, the legal docs use a **hash route** layer (`useHashRoute()` + a `hashchange` listener): `#/terms` and `#/privacy` render a standalone `LegalPage` **regardless of auth state**, and short-circuit before the `SignedIn`/`SignedOut` split. Hash routing needs no Vercel rewrite config (it never hits the server) and the URLs are directly shareable — which matters because footers, and potentially Stripe/Clerk, need reachable legal links. The signed-out branch, previously just a centered `<SignIn/>`, now renders `LandingPage`; `SignIn` is no longer imported there because the landing page opens auth through Clerk's `SignInButton`/`SignUpButton mode="modal"` instead.
+
+**The landing page** (`frontend/src/pages/LandingPage.jsx`) reuses UploadPage's exact visual language (the `#22d3ee` accent, dot-grid backdrop, glass cards) so it reads as the same product: hero with a QASPER-benchmark eyebrow and modal CTAs, a four-card feature row (exact-section citations / evidence-graded / multi-hop / benchmarked), a Free-vs-Pro pricing block that mirrors the real $9/mo split, and a footer linking the legal pages. The **demo GIF** is the one asset left to the owner: `DemoMedia` tries `${BASE_URL}demo.gif` and falls back to a labelled placeholder on error, so the page looks intentional whether or not the GIF exists yet — drop `frontend/public/demo.gif` and it appears with no code change. `upgrade_clicked` is fired from the landing CTAs so the existing PostHog funnel now starts one step earlier, at the marketing page.
+
+**The legal docs** (`frontend/src/legal/content.js`, rendered through `react-markdown`) are written against the *real* architecture, not boilerplate. The **ToS** makes the upload-rights point the checklist calls out — §3 states the user represents they have the rights to every document they upload and that copyright responsibility is theirs — and also covers the AI-not-advice disclaimer, the Free/Pro/Stripe billing terms, acceptable use, and liability. The **Privacy Policy** discloses every processor in a table (Clerk, Neon, R2, Stripe, the four LLM providers, Sentry, PostHog, hosting) and, importantly, states plainly that **document text and queries are sent to third-party LLM providers** to generate answers. Three tokens — `[[OPERATOR]]`, `[[JURISDICTION]]`, `[[CONTACT_EMAIL]]` — are left as greppable placeholders so the docs can't silently ship with the wrong entity on them.
+
+**Verification:** `eslint src` clean and `vite build` succeeds (only the pre-existing bundle-size advisory, nothing new). Live confirmation — the GIF rendering, the Clerk modals opening, the funnel events landing — is a deploy-time step. **Manual before live:** fill the three legal placeholders + get the docs reviewed, and add `frontend/public/demo.gif`.
+
+New files: `frontend/src/pages/LandingPage.jsx`, `frontend/src/pages/LegalPage.jsx`, `frontend/src/legal/content.js`. Modified: `frontend/src/App.jsx` (hash routing + landing in the signed-out branch), `frontend/src/pages/UploadPage.jsx` (Terms/Privacy footer links).
+
+## 32. Still to come in §5
+**Preloaded sample papers** — design settled (shared system-owned, quota-exempt, ingest-once demo set; see §31), implementation deferred to a follow-up. That's the last open §5 item.

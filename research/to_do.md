@@ -1,6 +1,6 @@
 # PaperMind — QASPER Eval TODO
 
-_Last updated: 2026-06-01. Goal: turn the QASPER ablation study into a workshop paper._
+_Last updated: 2026-06-18. Goal: turn the QASPER ablation study into a workshop paper._
 
 ## Where we are
 
@@ -51,13 +51,14 @@ Decide the verdict honestly from the data:
       - Cerebras was updated to `gpt-oss-120b` but returns null content intermittently
         (treated as a skip in `llm_client.py`, falls through to Mistral).
       - Gemini `2.5-flash-lite` is the working #1 provider (`2.0-flash` had free-quota 0).
-- [ ] **Verify provider names in `llm_client.py` (lines ~20–26).** Saw what looked like
-      duplicate/mislabeled `"Groq-1"` entries while tracing the `pin` path — confirm the
-      provider chain is what we think before trusting pinned-model runs. (Pin currently
-      matches the first `Groq-1`, which is genuine Groq, so weak/strong runs are valid.)
-- [ ] **Clean up the misleading log** in `llm_client.py`: every skipped provider is labeled
-      "rate-limited (RateLimitError)", which hid the real `limit:0` cause. Print the actual
-      error on skip.
+- [x] **Verify provider names in `llm_client.py`.** Confirmed (2026-06-18): chain is
+      `Groq-1`, `Groq-2`, `Gemini`, `Mistral`, `Cerebras` — no duplicate/mislabeled entries,
+      each guarded by its own env key. Pin `("Groq-1", model)` matches the genuine first Groq,
+      so weak/strong runs are valid.
+- [x] **Clean up the misleading log** in `llm_client.py`. Done: the skip branch now prints the
+      real error (`{type(e).__name__}: {str(e)[:120]}`) and distinguishes
+      `"rate-limited (retryable)"` from `"skipped"`, so the `limit:0` daily-quota cause is no
+      longer hidden behind a blanket "RateLimitError".
 
 ## Paper write-up tasks (after numbers are final)
 

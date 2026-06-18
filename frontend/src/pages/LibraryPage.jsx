@@ -77,6 +77,14 @@ function PaperRow({ paper, onOpen, onDelete }) {
         </p>
         <div className="flex items-center gap-2 mt-1">
           <StatusBadge status={paper.status} />
+          {paper.is_demo && (
+            <span
+              className="text-[9px] font-bold uppercase tracking-[0.12em] px-2 py-0.5 rounded-full"
+              style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#c4b5fd' }}
+            >
+              Sample
+            </span>
+          )}
           <span className="text-[9px] text-gray-700 font-mono">{date}</span>
           {paper.source_id && (
             <span className="text-[9px] text-gray-700 truncate max-w-[120px]">{paper.source_id}</span>
@@ -110,20 +118,22 @@ function PaperRow({ paper, onOpen, onDelete }) {
           </div>
         )}
 
-        {/* Delete */}
-        <button
-          onClick={handleDelete}
-          disabled={deleting}
-          className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200"
-          style={
-            confirming
-              ? { background: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.3)', color: '#fca5a5' }
-              : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#4b5563' }
-          }
-          onBlur={() => setTimeout(() => setConfirming(false), 200)}
-        >
-          {deleting ? '…' : confirming ? 'Confirm?' : 'Delete'}
-        </button>
+        {/* Delete — hidden for the shared, read-only demo set */}
+        {!paper.is_demo && (
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200"
+            style={
+              confirming
+                ? { background: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.3)', color: '#fca5a5' }
+                : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#4b5563' }
+            }
+            onBlur={() => setTimeout(() => setConfirming(false), 200)}
+          >
+            {deleting ? '…' : confirming ? 'Confirm?' : 'Delete'}
+          </button>
+        )}
       </div>
     </div>
   )

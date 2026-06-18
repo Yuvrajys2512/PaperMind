@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { SignedIn, SignedOut, SignIn, UserButton, useUser } from '@clerk/clerk-react'
+import { SignedIn, SignedOut, UserButton, useUser } from '@clerk/clerk-react'
 import { identify, resetAnalytics } from './analytics'
 import UploadPage from './pages/UploadPage'
 import ChatPage from './pages/ChatPage'
@@ -7,6 +7,21 @@ import DiscoverPage from './pages/DiscoverPage'
 import LibraryPage from './pages/LibraryPage'
 import RewritePage from './pages/RewritePage'
 import BillingPage from './pages/BillingPage'
+import LandingPage from './pages/LandingPage'
+import LegalPage from './pages/LegalPage'
+
+// Tiny hash-based route layer for the standalone legal pages. Hash routing
+// works on static hosting with no rewrite config and stays reachable whether
+// or not the visitor is signed in (footer links, Stripe, Clerk all need them).
+function useHashRoute() {
+  const [hash, setHash] = useState(() => window.location.hash)
+  useEffect(() => {
+    const onChange = () => setHash(window.location.hash)
+    window.addEventListener('hashchange', onChange)
+    return () => window.removeEventListener('hashchange', onChange)
+  }, [])
+  return hash
+}
 
 function AppPages() {
   // Land on the billing page after returning from Stripe Checkout/portal
@@ -84,13 +99,17 @@ function PostHogReset() {
 }
 
 export default function App() {
+  const hash = useHashRoute()
+
+  // Standalone legal pages — rendered regardless of auth state.
+  if (hash === '#/terms') return <LegalPage doc="terms" />
+  if (hash === '#/privacy') return <LegalPage doc="privacy" />
+
   return (
     <>
       <SignedOut>
         <PostHogReset />
-        <div className="min-h-screen flex items-center justify-center">
-          <SignIn />
-        </div>
+        <LandingPage />
       </SignedOut>
       <SignedIn>
         <PostHogIdentify />

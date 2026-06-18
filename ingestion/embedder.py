@@ -72,11 +72,15 @@ def embed_and_store(chunks: list, paper_name: str) -> None:
         for chunk in chunks
     ]
     
-    # Generate unique IDs for each chunk
-    # We use a hash of the text so re-running doesn't create duplicates
+    # Generate unique IDs for each chunk. Hashing the text keeps re-ingesting
+    # the same paper idempotent (identical chunks → identical IDs → upsert
+    # overwrites). We prefix the chunk's ordinal position so two chunks with
+    # *identical text* in one paper (e.g. a repeated header or table row) don't
+    # collide — a bare text hash made ChromaDB reject the whole batch with
+    # DuplicateIDError. Order is deterministic per PDF, so idempotency holds.
     ids = [
-        hashlib.md5(chunk["text"].encode()).hexdigest()
-        for chunk in chunks
+        hashlib.md5(f"{i}:{chunk['text']}".encode()).hexdigest()
+        for i, chunk in enumerate(chunks)
     ]
     
     # Store everything in ChromaDB
