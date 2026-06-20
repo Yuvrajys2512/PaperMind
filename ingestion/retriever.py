@@ -41,3 +41,23 @@ def retrieve(query: str, paper_name: str, top_k: int = 5) -> list:
         })
 
     return retrieved
+
+
+def get_all_chunks(paper_name: str) -> list:
+    """Return every stored chunk for a paper as {"text", "metadata"} dicts.
+
+    Unlike retrieve(), this does no embedding/search — it pulls the whole
+    collection so callers can scan by section metadata (e.g. the claim auditor
+    grabbing the Abstract / Introduction / Conclusion bodies). Single-paper
+    collections are small (typically <150 chunks), so a full get() is cheap.
+    Results are sorted by chunk_id to restore the paper's reading order.
+    """
+    collection = client.get_collection(name=collection_name(paper_name))
+    got = collection.get(include=["documents", "metadatas"])
+
+    chunks = []
+    for doc, meta in zip(got["documents"], got["metadatas"]):
+        chunks.append({"text": doc, "metadata": meta or {}})
+
+    chunks.sort(key=lambda c: c["metadata"].get("chunk_id", 0))
+    return chunks

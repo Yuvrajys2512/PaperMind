@@ -77,12 +77,10 @@ export async function comparePapers(paperIdA, paperIdB, question) {
    Streaming variants — Server-Sent Events
    onEvent receives { type, data } where type ∈ {open, progress, done, error}.
 ───────────────────────────────────────────────────────────────── */
-async function streamQuery(body, onEvent) {
-  const res = await fetch(`${BASE}/query/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream', ...await authHeaders() },
-    body: JSON.stringify(body),
-  })
+// Drain a fetch Response body as Server-Sent Events, forwarding each frame to
+// onEvent and returning the payload of the final `done` frame. Shared by every
+// streaming endpoint (query, compare, audit).
+async function consumeSSE(res, onEvent) {
   if (!res.ok || !res.body) {
     throw await httpError(res, `Stream failed: HTTP ${res.status}`)
   }
@@ -126,12 +124,42 @@ async function streamQuery(body, onEvent) {
   return finalResult
 }
 
+async function streamQuery(body, onEvent) {
+  const res = await fetch(`${BASE}/query/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream', ...await authHeaders() },
+    body: JSON.stringify(body),
+  })
+  return consumeSSE(res, onEvent)
+}
+
 export function queryPaperStream(paperId, question, onEvent) {
   return streamQuery({ paper_id: paperId, question }, onEvent)
 }
 
 export function comparePapersStream(paperIdA, paperIdB, question, onEvent) {
   return streamQuery({ paper_ids: [paperIdA, paperIdB], question }, onEvent)
+}
+
+// Claim audit — streams progress while the paper's claims are checked against
+// its own evidence. Pass force=true to recompute and bypass the cached report.
+export async function auditPaperStream(paperId, onEvent, force = false) {
+  const res = await fetch(`${BASE}/papers/${paperId}/audit/stream${force ? '?force=1' : ''}`, {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', ...await authHeaders() },
+  })
+  return consumeSSE(res, onEvent)
+}
+
+// Reviewer / weakness audit — streams progress while the paper is graded against
+// venue methodological norms (baselines, ablations, error bars, N, threats,
+// related work). Pass force=true to recompute and bypass the cached report.
+export async function reviewPaperStream(paperId, onEvent, force = false) {
+  const res = await fetch(`${BASE}/papers/${paperId}/review/stream${force ? '?force=1' : ''}`, {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', ...await authHeaders() },
+  })
+  return consumeSSE(res, onEvent)
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -198,6 +226,15 @@ export async function importPaper(result) {
 export async function getUsage() {
   const res = await fetch(`${BASE}/usage`, { headers: await authHeaders() })
   if (!res.ok) throw await httpError(res, 'Failed to load plan')
+  return res.json()
+}
+
+// Admin-only: aggregate cross-user usage + upstream-capacity projection.
+// The backend gates this to PAPERMIND_ADMIN_USER_IDS, so a non-admin gets a 403
+// (surfaced here as an Error with .status === 403).
+export async function getAdminUsage() {
+  const res = await fetch(`${BASE}/admin/usage`, { headers: await authHeaders() })
+  if (!res.ok) throw await httpError(res, 'Failed to load admin usage')
   return res.json()
 }
 

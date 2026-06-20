@@ -19,7 +19,7 @@ from ingestion.section_detector import (
     assemble_sections,
 )
 from ingestion.chunker import chunk_sections
-from ingestion.table_extractor import extract_tables_from_pdf
+from ingestion.table_extractor import tables_to_chunks
 
 
 def ingest_document(pdf_path: str, paper_name: str) -> dict:
@@ -48,6 +48,7 @@ def ingest_document(pdf_path: str, paper_name: str) -> dict:
         pages = parsed["pages"]
         full_text = parsed["full_text"]
         total_pages = parsed["total_pages"]
+        table_records = parsed.get("tables", [])
         print(f"[ingest] Parsed {total_pages} pages")
 
         # ── Step 2: Clean the full text ────────────────────────────────────
@@ -69,9 +70,11 @@ def ingest_document(pdf_path: str, paper_name: str) -> dict:
         chunks = chunk_sections(sections, chunk_size=512, overlap=100)
         print(f"[ingest] {len(chunks)} chunks created")
 
-        # ── Step 4.5: Extract tables ───────────────────────────────────────
-        print("[ingest] Extracting tables...")
-        table_chunks = extract_tables_from_pdf(pdf_path)
+        # ── Step 4.5: Format tables ────────────────────────────────────────
+        # Detection already happened in the parser (single pass); its records
+        # are carved out of the prose above, so there's no double-counting.
+        print("[ingest] Formatting tables...")
+        table_chunks = tables_to_chunks(table_records)
         print(f"[ingest] {len(table_chunks)} table chunks extracted")
         next_id = len(chunks) + 1
         for i, tc in enumerate(table_chunks):

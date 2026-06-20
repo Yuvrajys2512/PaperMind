@@ -37,21 +37,35 @@ load_dotenv()
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
-if not all([STRIPE_SECRET_KEY, STRIPE_PRICE_ID, STRIPE_WEBHOOK_SECRET]):
-    raise RuntimeError(
-        "STRIPE_SECRET_KEY, STRIPE_PRICE_ID and STRIPE_WEBHOOK_SECRET must all be set."
-    )
+
+# Billing is guarded by its keys, exactly like the observability integrations
+# (Sentry/PostHog). With all three Stripe secrets present it runs fully; with any
+# missing it stays dormant — the app still boots and every /billing route returns
+# 503 "billing not configured" instead of crashing at import. This keeps local
+# dev and pre-Stripe deploys runnable. Unlike auth/storage (which fail loud),
+# billing is optional at launch.
+BILLING_ENABLED = all([STRIPE_SECRET_KEY, STRIPE_PRICE_ID, STRIPE_WEBHOOK_SECRET])
 
 # Where Stripe sends the user back after Checkout / the portal.
 FRONTEND_URL = os.getenv("PAPERMIND_FRONTEND_URL", "http://localhost:5173").rstrip("/")
 
-stripe.api_key = STRIPE_SECRET_KEY
+if BILLING_ENABLED:
+    stripe.api_key = STRIPE_SECRET_KEY
+else:
+    print("[billing] Stripe keys not set — billing disabled; /billing routes return 503.")
 
 # Subscription statuses that should grant the 'pro' tier. Anything else
 # (canceled, unpaid, incomplete_expired, …) drops the user back to 'free'.
 _ACTIVE_STATUSES = {"active", "trialing"}
 
 router = APIRouter(prefix="/billing", tags=["billing"])
+
+
+def require_billing():
+    """Dependency: 503 every billing route when Stripe isn't configured, rather
+    than crashing the whole app at import when keys are absent."""
+    if not BILLING_ENABLED:
+        raise HTTPException(status_code=503, detail="Billing is not configured on this server.")
 
 
 def _ensure_schema():
@@ -74,7 +88,8 @@ def _ensure_schema():
         )
 
 
-_ensure_schema()
+if BILLING_ENABLED:
+    _ensure_schema()
 
 
 # ── Mapping: user_id ↔ Stripe customer ───────────────────────────────────────
@@ -151,7 +166,7 @@ def _period_end_from(subscription: dict) -> datetime | None:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/checkout")
-def create_checkout(user_id: str = Depends(get_current_user_id)):
+def create_checkout(user_id: str = Depends(get_current_user_id), _=Depends(require_billing)):
     try:
         customer_id = _get_or_create_customer(user_id)
     except Exception as exc:
@@ -192,7 +207,7 @@ def create_checkout(user_id: str = Depends(get_current_user_id)):
 
 
 @router.post("/portal")
-def create_portal(user_id: str = Depends(get_current_user_id)):
+def create_portal(user_id: str = Depends(get_current_user_id), _=Depends(require_billing)):
     customer_id = _get_customer_id(user_id)
     if not customer_id:
         raise HTTPException(status_code=400, detail="No billing account yet — subscribe first.")
@@ -220,7 +235,7 @@ def create_portal(user_id: str = Depends(get_current_user_id)):
 
 
 @router.post("/webhook")
-async def stripe_webhook(request: Request):
+async def stripe_webhook(request: Request, _=Depends(require_billing)):
     # No Clerk auth — Stripe calls this. Authenticity comes from the signature
     # over the raw request body, so we must use the bytes exactly as received.
     payload = await request.body()

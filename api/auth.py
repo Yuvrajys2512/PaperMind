@@ -4,11 +4,18 @@ import time
 import httpx
 import jwt
 from dotenv import load_dotenv
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 load_dotenv()
 
 CLERK_ISSUER = os.getenv("CLERK_ISSUER", "").rstrip("/")
+
+# Comma-separated allow-list of Clerk user ids permitted to hit admin endpoints
+# (e.g. the aggregate /admin/usage stats). Empty by default → admin surface is
+# locked to *nobody* until the owner opts in, so it can never be left wide open.
+_ADMIN_USER_IDS = {
+    uid.strip() for uid in os.getenv("PAPERMIND_ADMIN_USER_IDS", "").split(",") if uid.strip()
+}
 
 _JWKS_TTL_SECONDS = 3600
 _jwks_cache: dict = {"keys": {}, "fetched_at": 0.0}
@@ -65,3 +72,11 @@ def get_current_user_id(authorization: str = Header(None)) -> str:
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}")
 
     return payload["sub"]
+
+
+def require_admin(user_id: str = Depends(get_current_user_id)) -> str:
+    """FastAPI dependency: authenticates the caller, then 403s unless their
+    Clerk user id is in PAPERMIND_ADMIN_USER_IDS. Returns the admin's user_id."""
+    if user_id not in _ADMIN_USER_IDS:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return user_id

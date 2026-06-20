@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from discovery.search import search_papers
 from discovery.fetcher import download_paper
 from api.auth import get_current_user_id
+from api.usage import enforce_paper_quota
 from api.ingestion_runner import run_ingestion_from_storage
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
@@ -36,7 +37,10 @@ async def search(request: SearchRequest, _user_id: str = Depends(get_current_use
 async def import_paper(
     request: ImportRequest,
     background_tasks: BackgroundTasks,
-    user_id: str = Depends(get_current_user_id),
+    # Same paper cap as a direct /upload — importing also runs the (LLM-heavy)
+    # ingestion pipeline, so it must count against the free-tier paper limit
+    # rather than offering a quota-free side door to it.
+    user_id: str = Depends(enforce_paper_quota),
 ):
     if not request.pdf_url:
         raise HTTPException(status_code=400, detail="No PDF URL provided.")

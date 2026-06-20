@@ -7,8 +7,11 @@ Public API
 ----------
 enforce_paper_quota(user_id) -> str   FastAPI dependency; 429s over the free cap
 enforce_query_quota(user_id) -> str   FastAPI dependency; 429s over the free cap
-record_usage(...)                     log one LLM-costing event (query or upload)
+enforce_audit_quota(user_id) -> str   FastAPI dependency; 429s over the free cap
+                                       (deep paper analyses: claim audit + review)
+record_usage(...)                     log one LLM-costing event (query/audit/upload)
 get_usage_summary(user_id) -> dict    tier + current usage vs. limits
+get_aggregate_usage() -> dict         all-user totals + capacity projection (admin)
 """
 
 import os
@@ -18,10 +21,26 @@ from fastapi import Depends, HTTPException
 from api.auth import get_current_user_id
 from api.storage import _pool, list_papers
 
+# Free upstream quotas (tokens), used only for the capacity projection in
+# get_aggregate_usage. Mirrors ingestion/llm_client.py's provider chain and the
+# numbers in product/llm_api.md. Env-overridable so the projection tracks reality
+# if a paid key lifts a ceiling.
+_GROQ_TOKENS_PER_DAY = int(os.getenv("PAPERMIND_GROQ_TOKENS_PER_DAY", "100000"))
+_GROQ_KEYS = int(os.getenv("PAPERMIND_GROQ_KEYS", "2"))
+_MISTRAL_TOKENS_PER_MONTH = int(os.getenv("PAPERMIND_MISTRAL_TOKENS_PER_MONTH", "1000000000"))
+# Fallback per-query token estimate used until real query events accumulate.
+# Derived from the eval-based model in product/llm_api.md (~6k tokens/query).
+_MODELED_TOKENS_PER_QUERY = int(os.getenv("PAPERMIND_MODELED_TOKENS_PER_QUERY", "6000"))
+
 TIER_LIMITS = {
     "free": {
         "max_papers": int(os.getenv("PAPERMIND_FREE_MAX_PAPERS", "3")),
         "max_queries_per_month": int(os.getenv("PAPERMIND_FREE_MAX_QUERIES_PER_MONTH", "20")),
+        # Deep paper analyses (claim audit + weakness review) share a dedicated
+        # monthly cap so they never compete with the Q&A query budget. Each is
+        # the heaviest LLM operation in the app, but results are R2-cached — only
+        # the first run and forced re-runs count.
+        "max_audits_per_month": int(os.getenv("PAPERMIND_FREE_MAX_AUDITS_PER_MONTH", "10")),
     },
     # "pro" (set by §3/Stripe's webhook) is explicitly unlimited. `None` rides
     # the same code path as an unknown tier in _limits_for, so a `users.tier`
@@ -96,17 +115,26 @@ def set_user_tier(user_id: str, tier: str) -> None:
         )
 
 
-def count_queries_this_month(user_id: str) -> int:
+def _count_events_this_month(user_id: str, kind: str) -> int:
     with _pool.connection() as conn:
         cur = conn.execute(
             """
             SELECT COUNT(*) FROM usage_events
-            WHERE user_id = %s AND kind = 'query'
+            WHERE user_id = %s AND kind = %s
               AND created_at >= date_trunc('month', now())
             """,
-            (user_id,),
+            (user_id, kind),
         )
         return cur.fetchone()[0]
+
+
+def count_queries_this_month(user_id: str) -> int:
+    return _count_events_this_month(user_id, "query")
+
+
+def count_audits_this_month(user_id: str) -> int:
+    """Deep paper analyses (claim audit + weakness review) logged as kind='audit'."""
+    return _count_events_this_month(user_id, "audit")
 
 
 def record_usage(
@@ -161,6 +189,22 @@ def enforce_query_quota(user_id: str = Depends(get_current_user_id)) -> str:
     return user_id
 
 
+def enforce_audit_quota(user_id: str = Depends(get_current_user_id)) -> str:
+    """Gate for the deep paper analyses (claim audit + weakness review). Separate
+    from the Q&A query budget so a user running audits never burns query credit."""
+    limits = _limits_for(get_user_tier(user_id))
+    if limits is not None and count_audits_this_month(user_id) >= limits["max_audits_per_month"]:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Free tier limit of {limits['max_audits_per_month']} paper analyses/month "
+                "reached (claim audits and weakness reviews share this limit). "
+                "Try again next month."
+            ),
+        )
+    return user_id
+
+
 def get_usage_summary(user_id: str) -> dict:
     tier = get_user_tier(user_id)
     limits = _limits_for(tier) or {}
@@ -170,4 +214,84 @@ def get_usage_summary(user_id: str) -> dict:
         "papers_limit": limits.get("max_papers"),
         "queries_used": count_queries_this_month(user_id),
         "queries_limit": limits.get("max_queries_per_month"),
+        "audits_used": count_audits_this_month(user_id),
+        "audits_limit": limits.get("max_audits_per_month"),
+    }
+
+
+def get_aggregate_usage() -> dict:
+    """All-user aggregates plus an upstream-capacity projection. Admin-only.
+
+    Reports real per-query stats from usage_events once they exist, and projects
+    how many queries the free provider quotas can sustain. While usage_events has
+    no query rows yet, the projection falls back to the modeled ~6k tokens/query
+    (see product/llm_api.md) and flags `tokens_source` accordingly."""
+    with _pool.connection() as conn:
+        users_by_tier = dict(
+            conn.execute("SELECT tier, COUNT(*) FROM users GROUP BY tier").fetchall()
+        )
+        events_by_kind = dict(
+            conn.execute("SELECT kind, COUNT(*) FROM usage_events GROUP BY kind").fetchall()
+        )
+        q = conn.execute(
+            """
+            SELECT
+                COUNT(*)                                                          AS n,
+                AVG(llm_calls)                                                    AS avg_calls,
+                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY llm_calls)            AS p90_calls,
+                AVG(tokens_in + tokens_out)                                       AS avg_tokens,
+                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY tokens_in+tokens_out) AS p90_tokens,
+                AVG(cost_usd)                                                     AS avg_cost,
+                SUM(tokens_in + tokens_out)                                       AS sum_tokens,
+                SUM(cost_usd)                                                     AS sum_cost,
+                COUNT(DISTINCT user_id)                                           AS distinct_users
+            FROM usage_events
+            WHERE kind = 'query'
+            """
+        ).fetchone()
+
+    n = q[0] or 0
+    avg_calls, p90_calls, avg_tokens, p90_tokens, avg_cost, sum_tokens, sum_cost, distinct_q_users = (
+        float(q[1]) if q[1] is not None else 0.0,
+        float(q[2]) if q[2] is not None else 0.0,
+        float(q[3]) if q[3] is not None else 0.0,
+        float(q[4]) if q[4] is not None else 0.0,
+        float(q[5]) if q[5] is not None else 0.0,
+        int(q[6]) if q[6] is not None else 0,
+        float(q[7]) if q[7] is not None else 0.0,
+        int(q[8]) if q[8] is not None else 0,
+    )
+
+    # Use measured avg tokens/query if we have real data; else the modeled value.
+    tokens_per_query = avg_tokens if (n and avg_tokens) else float(_MODELED_TOKENS_PER_QUERY)
+    tokens_source = "measured" if (n and avg_tokens) else "modeled"
+
+    groq_daily = (_GROQ_TOKENS_PER_DAY * _GROQ_KEYS) / tokens_per_query
+    mistral_monthly = _MISTRAL_TOKENS_PER_MONTH / tokens_per_query
+    free_cap = TIER_LIMITS["free"]["max_queries_per_month"]
+
+    return {
+        "users": {"total": sum(users_by_tier.values()), "by_tier": users_by_tier},
+        "events_by_kind": events_by_kind,
+        "per_query": {
+            "n": n,
+            "avg_llm_calls": round(avg_calls, 2),
+            "p90_llm_calls": round(p90_calls, 1),
+            "avg_tokens": round(avg_tokens),
+            "p90_tokens": round(p90_tokens),
+            "avg_cost_usd": round(avg_cost, 6),
+            "distinct_users": distinct_q_users,
+        },
+        "lifetime": {
+            "query_tokens": sum_tokens,
+            "projected_cost_usd": round(sum_cost, 4),
+        },
+        "capacity": {
+            "tokens_per_query": round(tokens_per_query),
+            "tokens_source": tokens_source,
+            "groq_queries_per_day": round(groq_daily),
+            "groq_queries_per_month": round(groq_daily * 30),
+            "mistral_queries_per_month": round(mistral_monthly),
+            "free_users_supportable": round(mistral_monthly / free_cap) if free_cap else None,
+        },
     }

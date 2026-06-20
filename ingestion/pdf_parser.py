@@ -16,6 +16,129 @@ from statistics import median
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Table region handling — caption-anchored detection
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Pure-geometry table detection is unreliable on real papers: the default
+# "lines" strategy misses borderless (booktabs) tables and mis-fires on
+# figure grids, while the "text" strategy flags every justified-prose page as a
+# table. So we invert the mechanism: a "Table N:" caption is a reliable TEXT
+# anchor, so we use captions to LOCATE tables, then run text-based extraction
+# confined to the region just below each caption. Confining extraction to a
+# known table region is what makes the text strategy safe.
+
+# A caption looks like "Table 1:" / "Table 2." — we require the trailing colon
+# or period so in-body cross-references ("Table 2 summarizes our results ...")
+# are NOT mistaken for captions.
+_TABLE_CAPTION_RE = re.compile(r'^\s*table\s+\d+\s*[:.]', re.IGNORECASE)
+
+# How far below a caption we look for its table grid (points). Generous — the
+# detector returns the table's own tight bbox, so over-cropping is harmless.
+_TABLE_CROP_DEPTH = 340.0
+
+# Text-alignment table extraction, confined to the crop below a caption.
+_TABLE_SETTINGS = {"horizontal_strategy": "text", "vertical_strategy": "text"}
+
+
+def _char_center_in_bbox(c: dict, bbox: tuple) -> bool:
+    """True if a character's center point falls inside a table bounding box.
+
+    bbox is pdfplumber's (x0, top, x1, bottom) in the same top-based coordinate
+    space as char['x0']/'top']/'x1']/'bottom']. Using the center (rather than any
+    overlap) avoids dropping body-text chars that merely graze a table's edge.
+    """
+    x0, top, x1, bottom = bbox
+    cx = (c["x0"] + c["x1"]) / 2
+    cy = (c["top"] + c["bottom"]) / 2
+    return x0 <= cx <= x1 and top <= cy <= bottom
+
+
+def _caption_x_range(line_chars: list, col_boundary, page_width: float) -> tuple:
+    """Horizontal crop range for a caption's table.
+
+    On two-column pages a full-width crop would merge the table with prose from
+    the other column, so we confine the crop to the caption's own column. A
+    caption whose text spans the gutter belongs to a full-width table and keeps
+    the whole width.
+    """
+    if col_boundary is None or not line_chars:
+        return (0.0, page_width)
+    left = min(c["x0"] for c in line_chars)
+    right = max(c["x1"] for c in line_chars)
+    margin = 8.0
+    spans_gutter = left < col_boundary - margin and right > col_boundary + margin
+    if spans_gutter:
+        return (0.0, page_width)
+    center = (left + right) / 2
+    if center < col_boundary:
+        return (0.0, col_boundary)
+    return (col_boundary, page_width)
+
+
+def _extract_table_records(page, all_lines: list, page_num: int,
+                           col_boundary, page_width: float) -> list:
+    """Caption-anchored table extraction for one page.
+
+    1. Find caption lines ("Table N:") via text.
+    2. For each, crop the region below it (bounded by the next caption, a fixed
+       depth, and — on two-column pages — the caption's own column) and run
+       text-strategy extraction confined to that crop.
+    3. Keep the densest detected grid; record its rows, caption, and tight bbox.
+
+    Returns a list of {"rows", "page_num", "caption", "bbox"} records. The bbox
+    is in page coordinates so the caller can carve those chars out of the prose.
+    """
+    captions = []  # (y, text, line_chars)
+    for y, line_chars in all_lines:
+        text = chars_to_text(line_chars).strip()
+        if _TABLE_CAPTION_RE.match(text):
+            captions.append((y, text, line_chars))
+    if not captions:
+        return []
+
+    captions.sort(key=lambda c: c[0])
+    cap_ys = [y for y, _, _ in captions]
+    records = []
+
+    for idx, (cap_y, cap_text, cap_chars) in enumerate(captions):
+        top = cap_y + 12  # skip the caption line itself
+        # Bottom bound: the next caption on this page, else a fixed depth.
+        next_cap = cap_ys[idx + 1] if idx + 1 < len(cap_ys) else None
+        bottom = min(
+            page.height,
+            cap_y + _TABLE_CROP_DEPTH,
+            next_cap if next_cap is not None else page.height,
+        )
+        if bottom - top < 10:
+            continue
+
+        x_left, x_right = _caption_x_range(cap_chars, col_boundary, page_width)
+
+        try:
+            crop = page.crop((x_left, top, x_right, bottom))
+            found = crop.find_tables(table_settings=_TABLE_SETTINGS)
+        except Exception:
+            found = []
+        if not found:
+            continue
+
+        # Densest grid = most cells; that's the table, not stray aligned prose.
+        best = max(found, key=lambda t: sum(len(r) for r in (t.extract() or [])))
+        rows = best.extract()
+        if not rows:
+            continue
+
+        records.append({
+            "rows": rows,
+            "page_num": page_num,
+            "caption": cap_text,
+            "bbox": best.bbox,
+        })
+
+    return records
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Low-level helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -402,9 +525,18 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
             "pages": [{"page_num": int, "text": str, "chars": list}, ...],
             "full_text": str,
             "total_pages": int,
+            "tables": [{"rows": list, "page_num": int, "caption": str,
+                        "bbox": tuple}, ...],
         }
+
+    Table regions are detected once here and their characters are carved OUT of
+    each page's prose stream (and out of page['chars']). This stops table cells
+    from being mangled into prose lines or scored as heading candidates, and it
+    means the table grid is represented exactly once — as a structured record in
+    'tables' — instead of being duplicated as both garbled prose and a chunk.
     """
     pages = []
+    tables = []
 
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
@@ -418,20 +550,43 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
 
             page_width = page.width
 
+            # ── Detect tables (caption-anchored); carve them out of prose ───
+            # Column boundary is computed from the full char set (before
+            # carving) so two-column table crops can be confined to one column.
+            all_lines = _group_chars_into_lines(upright_chars)
+            page_col_boundary = _detect_column_boundary(upright_chars, page_width)
+            page_records = _extract_table_records(
+                page, all_lines, page_num, page_col_boundary, page_width
+            )
+            tables.extend(page_records)
+            table_bboxes = [r["bbox"] for r in page_records]
+
+            if table_bboxes:
+                prose_chars = [
+                    c for c in upright_chars
+                    if not any(_char_center_in_bbox(c, b) for b in table_bboxes)
+                ]
+            else:
+                prose_chars = upright_chars
+
+            if not prose_chars:
+                # Page was entirely table — nothing to add to the prose stream.
+                continue
+
             # Detect column layout for this specific page
-            col_boundary = _detect_column_boundary(upright_chars, page_width)
+            col_boundary = _detect_column_boundary(prose_chars, page_width)
 
             if col_boundary is not None:
                 page_text = _process_two_column(
-                    upright_chars, col_boundary, page_width
+                    prose_chars, col_boundary, page_width
                 )
             else:
-                page_text = _process_single_column(upright_chars)
+                page_text = _process_single_column(prose_chars)
 
             pages.append({
                 "page_num": page_num,
                 "text": page_text,
-                "chars": upright_chars,
+                "chars": prose_chars,
                 "page_width": page_width,
             })
 
@@ -441,6 +596,7 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
         "pages": pages,
         "full_text": full_text,
         "total_pages": total_pages,
+        "tables": tables,
     }
 
 

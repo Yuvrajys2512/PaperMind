@@ -95,8 +95,9 @@ export default function BillingPage({ onBack }) {
             </div>
 
             {/* usage meters */}
-            <MeterRow label="Papers"          used={usage.papers_used}  limit={usage.papers_limit} />
-            <MeterRow label="Queries (month)" used={usage.queries_used} limit={usage.queries_limit} />
+            <MeterRow label="Papers"           used={usage.papers_used}  limit={usage.papers_limit} />
+            <MeterRow label="Queries (month)"  used={usage.queries_used} limit={usage.queries_limit} />
+            <MeterRow label="Analyses (month)" used={usage.audits_used}  limit={usage.audits_limit} />
 
             {/* call to action */}
             <div className="mt-7 pt-6" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>

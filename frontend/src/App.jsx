@@ -7,8 +7,20 @@ import DiscoverPage from './pages/DiscoverPage'
 import LibraryPage from './pages/LibraryPage'
 import RewritePage from './pages/RewritePage'
 import BillingPage from './pages/BillingPage'
+import AdminPage from './pages/AdminPage'
 import LandingPage from './pages/LandingPage'
 import LegalPage from './pages/LegalPage'
+
+// Clerk user ids allowed to see the Admin nav link, mirroring the backend's
+// PAPERMIND_ADMIN_USER_IDS. This only hides the menu entry — the real gate is
+// server-side (/admin/usage 403s anyone not on the backend list), so a
+// mismatch or a poked-around UI never leaks data.
+const ADMIN_USER_IDS = new Set(
+  (import.meta.env.VITE_ADMIN_USER_IDS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+)
 
 // Tiny hash-based route layer for the standalone legal pages. Hash routing
 // works on static hosting with no rewrite config and stays reachable whether
@@ -24,6 +36,9 @@ function useHashRoute() {
 }
 
 function AppPages() {
+  const { user } = useUser()
+  const isAdmin = !!user && ADMIN_USER_IDS.has(user.id)
+
   // Land on the billing page after returning from Stripe Checkout/portal
   // (success_url / cancel_url carry ?billing=…), then strip the param so a
   // refresh doesn't keep forcing it.
@@ -71,6 +86,9 @@ function AppPages() {
   if (page === 'billing') {
     return <BillingPage onBack={() => setPage('upload')} />
   }
+  if (page === 'admin') {
+    return <AdminPage onBack={() => setPage('upload')} />
+  }
   return (
     <UploadPage
       onPaperReady={handlePaperReady}
@@ -78,6 +96,7 @@ function AppPages() {
       onLibrary={() => setPage('library')}
       onRewrite={() => setPage('rewrite')}
       onBilling={() => setPage('billing')}
+      onAdmin={isAdmin ? () => setPage('admin') : undefined}
     />
   )
 }
@@ -104,6 +123,20 @@ export default function App() {
   // Standalone legal pages — rendered regardless of auth state.
   if (hash === '#/terms') return <LegalPage doc="terms" />
   if (hash === '#/privacy') return <LegalPage doc="privacy" />
+
+  // TEMP preview of the admin panel — REAL values from get_aggregate_usage()
+  // against the live DB (no auth/backend needed to render). Mostly zeros because
+  // no real query events exist yet, so capacity falls back to the modeled
+  // estimate. Remove this route + the import below once viewed.
+  if (hash === '#/admin-preview') {
+    return <AdminPage onBack={() => { window.location.hash = '' }} previewData={{
+      users: { total: 1, by_tier: { free: 1 } },
+      events_by_kind: { seed: 4 },
+      per_query: { n: 0, avg_llm_calls: 0, p90_llm_calls: 0, avg_tokens: 0, p90_tokens: 0, avg_cost_usd: 0, distinct_users: 0 },
+      lifetime: { query_tokens: 0, projected_cost_usd: 0 },
+      capacity: { tokens_per_query: 6000, tokens_source: 'modeled', groq_queries_per_day: 33, mistral_queries_per_month: 166667, free_users_supportable: 8333 },
+    }} />
+  }
 
   return (
     <>

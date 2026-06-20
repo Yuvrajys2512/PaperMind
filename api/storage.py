@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import uuid
@@ -188,3 +189,82 @@ def get_pdf_stream(paper_id: str):
 def delete_pdf(paper_id: str):
     """Deletes a paper's PDF from R2."""
     _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=f"{paper_id}.pdf")
+
+
+# ── Claim-audit reports (Cloudflare R2) ───────────────────────────────────────
+# Cached as a JSON blob next to the PDF so re-opening a paper's audit is free
+# (an audit is the heaviest LLM operation in the app). Stored in R2 rather than
+# Postgres to avoid a schema migration — the report is an opaque document keyed
+# only by paper_id, never queried by column.
+
+def _audit_key(paper_id: str) -> str:
+    return f"{paper_id}.audit.json"
+
+
+def upload_audit_report(paper_id: str, report: dict):
+    """Persist a claim-audit report as a JSON blob in R2."""
+    _s3.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=_audit_key(paper_id),
+        Body=json.dumps(report).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def get_audit_report(paper_id: str) -> dict | None:
+    """Return the cached audit report for a paper, or None if none exists."""
+    try:
+        obj = _s3.get_object(Bucket=R2_BUCKET_NAME, Key=_audit_key(paper_id))
+    except _s3.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        # Treat any read failure as a cache miss — the caller will recompute.
+        return None
+    try:
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_audit_report(paper_id: str):
+    """Best-effort delete of a paper's cached audit report."""
+    _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_audit_key(paper_id))
+
+
+# ── Reviewer / weakness-audit reports (Cloudflare R2) ─────────────────────────
+# The methodological-completeness audit (reviewer_auditor) — same caching
+# rationale as the claim audit above: an opaque JSON document keyed only by
+# paper_id, stored next to the PDF so re-opening a paper's review is free.
+
+def _review_key(paper_id: str) -> str:
+    return f"{paper_id}.review.json"
+
+
+def upload_review_report(paper_id: str, report: dict):
+    """Persist a reviewer/weakness-audit report as a JSON blob in R2."""
+    _s3.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=_review_key(paper_id),
+        Body=json.dumps(report).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def get_review_report(paper_id: str) -> dict | None:
+    """Return the cached reviewer-audit report for a paper, or None if none exists."""
+    try:
+        obj = _s3.get_object(Bucket=R2_BUCKET_NAME, Key=_review_key(paper_id))
+    except _s3.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        # Treat any read failure as a cache miss — the caller will recompute.
+        return None
+    try:
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_review_report(paper_id: str):
+    """Best-effort delete of a paper's cached reviewer-audit report."""
+    _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_review_key(paper_id))

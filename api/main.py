@@ -14,7 +14,10 @@ sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import threading
 
 from ingestion.pipeline import answer_query, compare_papers
+from ingestion.claim_auditor import audit_paper
+from ingestion.reviewer_auditor import review_paper
 from ingestion.rewriter import rewrite_text
+from ingestion.llm_client import get_stats, reset_stats
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -22,7 +25,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
-from api.auth import get_current_user_id
+from api.auth import get_current_user_id, require_admin
 from api.ingestion_runner import run_ingestion_from_storage, regenerate_missing_collections
 from api.logger import generate_request_id
 from api.concurrency import get_chroma_client, paper_locked
@@ -38,8 +41,21 @@ from api.storage import (
     get_pdf_stream,
     delete_pdf,
     delete_paper_record,
+    upload_audit_report,
+    get_audit_report,
+    delete_audit_report,
+    upload_review_report,
+    get_review_report,
+    delete_review_report,
 )
-from api.usage import enforce_paper_quota, enforce_query_quota, get_usage_summary, record_usage
+from api.usage import (
+    enforce_paper_quota,
+    enforce_query_quota,
+    enforce_audit_quota,
+    get_aggregate_usage,
+    get_usage_summary,
+    record_usage,
+)
 from api.uploads import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, PDF_MAGIC
 from api.logger import generate_request_id, log_query
 from ingestion.bm25_retriever  import invalidate_bm25_cache
@@ -67,6 +83,13 @@ if _sentry_dsn:
 # CORS: a comma-separated allow-list, locked down from the old "*". Defaults to
 # the Vite dev origin; set ALLOWED_ORIGINS to the real domain(s) in production.
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+
+# Caps on free-text LLM inputs. Without these a single request can carry
+# megabytes of text straight into the providers — blowing up token cost and
+# risking provider context-window errors. Override via env if a real workload
+# needs more headroom.
+MAX_QUESTION_CHARS = int(os.getenv("PAPERMIND_MAX_QUESTION_CHARS", "2000"))
+MAX_REWRITE_CHARS = int(os.getenv("PAPERMIND_MAX_REWRITE_CHARS", "8000"))
 
 # Per-IP rate limiting. 120/min is generous for real humans but caps scripted
 # abuse on the public endpoints. The Stripe webhook and /health pings ride the
@@ -230,6 +253,13 @@ def get_usage(user_id: str = Depends(get_current_user_id)):
     return get_usage_summary(user_id)
 
 
+@app.get("/admin/usage")
+def get_admin_usage(admin_id: str = Depends(require_admin)):
+    """Aggregate cross-user usage + upstream-capacity projection. Gated to the
+    Clerk user ids in PAPERMIND_ADMIN_USER_IDS. See product/llm_api.md."""
+    return get_aggregate_usage()
+
+
 @app.delete("/papers/{paper_id}")
 def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_current_user_id)):
     req_id = getattr(request.state, 'req_id', 'unknown')
@@ -301,6 +331,25 @@ def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_cur
                 context={"paper_id": paper_id},
             )
 
+        # Drop the cached claim-audit and reviewer-audit reports, if any.
+        # Best-effort — an orphaned blob is harmless, so a missing/failed delete
+        # must not block the rest.
+        for _drop, _op in (
+            (delete_audit_report, "delete_audit_report"),
+            (delete_review_report, "delete_review_report"),
+        ):
+            try:
+                _drop(paper_id)
+            except Exception as exc:
+                log_operation(
+                    _op,
+                    "error",
+                    req_id=req_id,
+                    user_id=user_id,
+                    error=exc,
+                    context={"paper_id": paper_id},
+                )
+
     log_operation(
         "delete_paper",
         "success",
@@ -330,8 +379,9 @@ def serve_paper_pdf(paper_id: str, user_id: str = Depends(get_current_user_id)):
 
 
 @app.get("/papers/{paper_id}/glossary")
-async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id)):
+async def get_glossary(paper_id: str, user_id: str = Depends(enforce_query_quota)):
     t0 = time.monotonic()
+    req_id = generate_request_id()
     paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
@@ -343,6 +393,7 @@ async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id
     def _extract():
         from ingestion.retriever import retrieve
         from ingestion.llm_client import chat_completion
+        reset_stats()
         chunks = retrieve("technical terms methods algorithms definitions equations notation", paper_id, top_k=10)
         context = "\n\n---\n\n".join(c["text"][:600] for c in chunks)
         raw = chat_completion(
@@ -361,13 +412,24 @@ async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        return json.loads(raw.strip())
+        return json.loads(raw.strip()), get_stats()
 
     try:
-        terms = await asyncio.wait_for(loop.run_in_executor(None, _extract), timeout=40.0)
+        terms, stats = await asyncio.wait_for(loop.run_in_executor(None, _extract), timeout=40.0)
+        record_usage(
+            user_id=user_id,
+            kind="query",
+            req_id=req_id,
+            paper_id=paper_id,
+            llm_calls=stats["call_count"],
+            tokens_in=stats["tokens_in"],
+            tokens_out=stats["tokens_out"],
+            cost_usd=stats["cost_usd"],
+        )
         log_operation(
             "extract_glossary",
             "success",
+            req_id=req_id,
             user_id=user_id,
             context={"paper_id": paper_id},
             duration_ms=round((time.monotonic() - t0) * 1000),
@@ -396,8 +458,9 @@ async def get_glossary(paper_id: str, user_id: str = Depends(get_current_user_id
 
 
 @app.get("/papers/{paper_id}/recommendations")
-async def get_recommendations(paper_id: str, user_id: str = Depends(get_current_user_id)):
+async def get_recommendations(paper_id: str, user_id: str = Depends(enforce_query_quota)):
     t0 = time.monotonic()
+    req_id = generate_request_id()
     paper = get_readable_paper(paper_id, user_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found.")
@@ -409,6 +472,7 @@ async def get_recommendations(paper_id: str, user_id: str = Depends(get_current_
     def _get_queries():
         from ingestion.retriever import retrieve
         from ingestion.llm_client import chat_completion
+        reset_stats()
         chunks = retrieve("main contribution methodology results key findings", paper_id, top_k=5)
         context = "\n\n".join(c["text"][:400] for c in chunks)
         raw = chat_completion(
@@ -425,10 +489,20 @@ async def get_recommendations(paper_id: str, user_id: str = Depends(get_current_
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        return json.loads(raw.strip())
+        return json.loads(raw.strip()), get_stats()
 
     try:
-        queries = await asyncio.wait_for(loop.run_in_executor(None, _get_queries), timeout=20.0)
+        queries, stats = await asyncio.wait_for(loop.run_in_executor(None, _get_queries), timeout=20.0)
+        record_usage(
+            user_id=user_id,
+            kind="query",
+            req_id=req_id,
+            paper_id=paper_id,
+            llm_calls=stats["call_count"],
+            tokens_in=stats["tokens_in"],
+            tokens_out=stats["tokens_out"],
+            cost_usd=stats["cost_usd"],
+        )
     except asyncio.TimeoutError:
         log_operation(
             "extract_recommendations",
@@ -486,22 +560,47 @@ class RewriteRequest(BaseModel):
 
 
 @app.post("/rewrite")
-async def rewrite(request: RewriteRequest, user_id: str = Depends(get_current_user_id)):
+async def rewrite(request: RewriteRequest, user_id: str = Depends(enforce_query_quota)):
     t0 = time.monotonic()
+    req_id = generate_request_id()
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
+    if len(request.text) > MAX_REWRITE_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text is too long ({len(request.text)} chars). Max is {MAX_REWRITE_CHARS}.",
+        )
     if request.mode not in ("academic", "plain", "concise"):
         raise HTTPException(status_code=400, detail="mode must be academic, plain, or concise.")
 
     loop = asyncio.get_running_loop()
+
+    def _do_rewrite():
+        # reset_stats / get_stats are thread-local and must run in the same
+        # executor thread as the LLM call, so the token/cost numbers belong to
+        # this request only.
+        reset_stats()
+        out = rewrite_text(request.text, request.mode)
+        return out, get_stats()
+
     try:
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, rewrite_text, request.text, request.mode),
+        result, stats = await asyncio.wait_for(
+            loop.run_in_executor(None, _do_rewrite),
             timeout=30.0,
+        )
+        record_usage(
+            user_id=user_id,
+            kind="query",
+            req_id=req_id,
+            llm_calls=stats["call_count"],
+            tokens_in=stats["tokens_in"],
+            tokens_out=stats["tokens_out"],
+            cost_usd=stats["cost_usd"],
         )
         log_operation(
             "rewrite_text",
             "success",
+            req_id=req_id,
             user_id=user_id,
             context={"mode": request.mode, "text_length": len(request.text)},
             duration_ms=round((time.monotonic() - t0) * 1000),
@@ -536,11 +635,25 @@ class QueryRequest(BaseModel):
     question: str
 
 
+def _validate_question(question: str) -> None:
+    """Reject empty or oversized questions before any LLM work fires. Shared by
+    /query and /query/stream so both endpoints enforce the same cap."""
+    if not question or not question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+    if len(question) > MAX_QUESTION_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Question is too long ({len(question)} chars). Max is {MAX_QUESTION_CHARS}.",
+        )
+
+
 @app.post("/query")
 async def query_paper(req: QueryRequest, user_id: str = Depends(enforce_query_quota)):
     req_id = generate_request_id()
     loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
+
+    _validate_question(req.question)
 
     # ── Multi-paper comparison ────────────────────────────────────────────
     if req.paper_ids and len(req.paper_ids) == 2:
@@ -721,6 +834,8 @@ async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_q
     t0     = time.monotonic()
     queue: asyncio.Queue = asyncio.Queue()
 
+    _validate_question(req.question)
+
     is_compare = bool(req.paper_ids and len(req.paper_ids) == 2)
 
     # Validate inputs the same way /query does — bail fast with HTTPException
@@ -859,5 +974,285 @@ async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_q
         media_type="text/event-stream",
         # Disable nginx/proxy buffering so progress events flush
         # immediately rather than batching.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Claim audit — claim→evidence grounding + overclaim detection (SSE)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Reuses the /query/stream architecture (progress pusher + SSE generator). An
+# audit is the heaviest LLM operation in the app (claim extraction + per-claim
+# retrieval + batched verdicts), so the result is cached in R2 and re-served
+# without LLM cost unless ?force=1 is passed.
+
+@app.post("/papers/{paper_id}/audit/stream")
+async def audit_paper_stream(
+    paper_id: str,
+    request: Request,
+    force: bool = False,
+    user_id: str = Depends(enforce_audit_quota),
+):
+    req_id = generate_request_id()
+    loop   = asyncio.get_running_loop()
+    t0     = time.monotonic()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    paper = get_readable_paper(paper_id, user_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paper is not ready yet. Current status: {paper['status']}",
+        )
+
+    # Serve the cached report instantly when present (no LLM, no usage recorded).
+    if not force:
+        cached = get_audit_report(paper_id)
+        if cached:
+            async def cached_stream():
+                yield _sse_format("open", {"req_id": req_id})
+                cached["cached"] = True
+                yield _sse_format("done", cached)
+            return StreamingResponse(
+                cached_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    on_progress = _make_progress_pusher(queue, loop)
+
+    async def run_audit():
+        try:
+            def fn():
+                # reset_stats/get_stats are thread-local — run them in the same
+                # executor thread as the LLM work so the usage numbers are this
+                # audit's only. Lock the paper like a query so a concurrent
+                # delete/query can't pull Chroma state out from under us.
+                with paper_locked(paper_id):
+                    reset_stats()
+                    report = audit_paper(paper_id, on_progress=on_progress)
+                    return report, get_stats()
+
+            report, stats = await asyncio.wait_for(
+                loop.run_in_executor(None, fn),
+                timeout=180.0,
+            )
+            await queue.put(("done", (report, stats)))
+        except asyncio.TimeoutError:
+            log_operation(
+                "audit_paper", "error", req_id=req_id, user_id=user_id,
+                error="timeout", context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {
+                "message": "Audit timed out. The paper may be unusually large — please try again.",
+            }))
+        except Exception as exc:
+            log_operation(
+                "audit_paper", "error", req_id=req_id, user_id=user_id,
+                error=exc, context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {"message": f"Audit failed: {exc}"}))
+
+    asyncio.create_task(run_audit())
+
+    async def event_stream():
+        yield _sse_format("open", {"req_id": req_id})
+
+        while True:
+            kind, payload = await queue.get()
+
+            if kind == "progress":
+                yield _sse_format("progress", payload)
+                continue
+
+            if kind == "error":
+                yield _sse_format("error", payload)
+                return
+
+            if kind == "done":
+                report, stats = payload
+                # Only record usage + cache when the audit actually produced a
+                # report (a hard failure shouldn't be cached or billed).
+                if not report.get("audit_failed"):
+                    try:
+                        upload_audit_report(paper_id, report)
+                    except Exception as exc:
+                        log_operation(
+                            "upload_audit_report", "error", req_id=req_id,
+                            user_id=user_id, error=exc, context={"paper_id": paper_id},
+                        )
+                    record_usage(
+                        user_id=user_id,
+                        kind="audit",
+                        req_id=req_id,
+                        paper_id=paper_id,
+                        llm_calls=stats["call_count"],
+                        tokens_in=stats["tokens_in"],
+                        tokens_out=stats["tokens_out"],
+                        cost_usd=stats["cost_usd"],
+                    )
+                log_operation(
+                    "audit_paper", "success", req_id=req_id, user_id=user_id,
+                    context={
+                        "paper_id": paper_id,
+                        "claims_checked": report.get("claims_checked", 0),
+                        "flagged": report.get("flagged", 0),
+                    },
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                )
+                report["request_id"] = req_id
+                report["cached"] = False
+                yield _sse_format("done", report)
+                return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reviewer / weakness audit — methodological completeness vs. venue norms (SSE)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Complement of the claim audit above: instead of "do the claims match the
+# paper's own evidence?", this asks "does the paper meet the methodological bar
+# a reviewer would hold it to?" (missing baselines / ablations / error bars /
+# small N / threats to validity / thin related work). Same architecture: progress
+# pusher + SSE, R2-cached, re-served without LLM cost unless ?force=1 is passed.
+
+@app.post("/papers/{paper_id}/review/stream")
+async def review_paper_stream(
+    paper_id: str,
+    request: Request,
+    force: bool = False,
+    user_id: str = Depends(enforce_audit_quota),
+):
+    req_id = generate_request_id()
+    loop   = asyncio.get_running_loop()
+    t0     = time.monotonic()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    paper = get_readable_paper(paper_id, user_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paper is not ready yet. Current status: {paper['status']}",
+        )
+
+    # Serve the cached report instantly when present (no LLM, no usage recorded).
+    if not force:
+        cached = get_review_report(paper_id)
+        if cached:
+            async def cached_stream():
+                yield _sse_format("open", {"req_id": req_id})
+                cached["cached"] = True
+                yield _sse_format("done", cached)
+            return StreamingResponse(
+                cached_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    on_progress = _make_progress_pusher(queue, loop)
+
+    async def run_review():
+        try:
+            def fn():
+                # reset_stats/get_stats are thread-local — run them in the same
+                # executor thread as the LLM work so the usage numbers are this
+                # review's only. Lock the paper like a query so a concurrent
+                # delete/query can't pull Chroma state out from under us.
+                with paper_locked(paper_id):
+                    reset_stats()
+                    report = review_paper(paper_id, on_progress=on_progress)
+                    return report, get_stats()
+
+            report, stats = await asyncio.wait_for(
+                loop.run_in_executor(None, fn),
+                timeout=180.0,
+            )
+            await queue.put(("done", (report, stats)))
+        except asyncio.TimeoutError:
+            log_operation(
+                "review_paper", "error", req_id=req_id, user_id=user_id,
+                error="timeout", context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {
+                "message": "Review timed out. The paper may be unusually large — please try again.",
+            }))
+        except Exception as exc:
+            log_operation(
+                "review_paper", "error", req_id=req_id, user_id=user_id,
+                error=exc, context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {"message": f"Review failed: {exc}"}))
+
+    asyncio.create_task(run_review())
+
+    async def event_stream():
+        yield _sse_format("open", {"req_id": req_id})
+
+        while True:
+            kind, payload = await queue.get()
+
+            if kind == "progress":
+                yield _sse_format("progress", payload)
+                continue
+
+            if kind == "error":
+                yield _sse_format("error", payload)
+                return
+
+            if kind == "done":
+                report, stats = payload
+                # Only record usage + cache when the review actually produced a
+                # report (a hard failure shouldn't be cached or billed).
+                if not report.get("review_failed"):
+                    try:
+                        upload_review_report(paper_id, report)
+                    except Exception as exc:
+                        log_operation(
+                            "upload_review_report", "error", req_id=req_id,
+                            user_id=user_id, error=exc, context={"paper_id": paper_id},
+                        )
+                    record_usage(
+                        user_id=user_id,
+                        kind="audit",
+                        req_id=req_id,
+                        paper_id=paper_id,
+                        llm_calls=stats["call_count"],
+                        tokens_in=stats["tokens_in"],
+                        tokens_out=stats["tokens_out"],
+                        cost_usd=stats["cost_usd"],
+                    )
+                log_operation(
+                    "review_paper", "success", req_id=req_id, user_id=user_id,
+                    context={
+                        "paper_id": paper_id,
+                        "dimensions_checked": report.get("dimensions_checked", 0),
+                        "weak": report.get("weak", 0),
+                        "missing": report.get("missing", 0),
+                    },
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                )
+                report["request_id"] = req_id
+                report["cached"] = False
+                yield _sse_format("done", report)
+                return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
