@@ -4,11 +4,11 @@ ingestion/llm_client.py
 Unified LLM client with automatic provider rotation and fallback.
 
 Priority order (fastest / most reliable first):
-  1. Groq key 1        — LPU, ~150ms, 100k tokens/day
-  2. Groq key 2        — same, second key for overflow
-  3. Gemini Flash Lite — free quota, ~1s, 2.5-flash-lite
-  4. Mistral Small     — reliable fallback, 1B tokens/month
-  5. Cerebras          — last: gpt-oss-120b returns null content intermittently
+  1. Groq key pool     — LPU, ~150ms; GROQ_API_KEY + GROQ_API_KEY_2.._8, each with
+                         its own budget, auto-discovered as Groq-1, Groq-2, …
+  2. Gemini Flash Lite — free quota, ~1s, 2.5-flash-lite
+  3. Mistral Small     — reliable fallback, 1B tokens/month
+  4. Cerebras          — last: gpt-oss-120b returns null content intermittently
 
 On rate limit / quota errors the client automatically tries the next provider.
 If a whole pass exhausts every provider AND at least one was hit by a
@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 import time
 import threading
-from openai import OpenAI
+from openai import OpenAI, APIConnectionError, APITimeoutError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -80,7 +80,11 @@ _PRICING: dict[tuple[str, str], tuple[float, float]] = {
 
 def _cost(provider_name: str, model: str, tokens_in: int, tokens_out: int) -> float:
     """USD cost of one call, or 0.0 if the (provider, model) pair isn't priced."""
-    price_in, price_out = _PRICING.get((provider_name, model), (0.0, 0.0))
+    # Every Groq key (Groq-1, Groq-2, … Groq-N) runs the same model at the same
+    # price; collapse to the canonical "Groq-1" entry so overflow keys are still
+    # priced instead of silently projecting $0.
+    canon = "Groq-1" if provider_name.startswith("Groq-") else provider_name
+    price_in, price_out = _PRICING.get((canon, model), (0.0, 0.0))
     return (tokens_in * price_in + tokens_out * price_out) / 1_000_000
 
 
@@ -97,27 +101,25 @@ _PROVIDERS: list[dict] = []
 #   Mistral — reliable fallback.
 #   Cerebras— last: gpt-oss-120b returns null content intermittently.
 
-if os.getenv("GROQ_API_KEY"):
-    _PROVIDERS.append({
-        "name":   "Groq-1",
-        "client": OpenAI(
-            api_key     = os.getenv("GROQ_API_KEY"),
-            base_url    = "https://api.groq.com/openai/v1",
-            max_retries = 0,
-        ),
-        "model": "llama-3.3-70b-versatile",
-    })
-
-if os.getenv("GROQ_API_KEY_2"):
-    _PROVIDERS.append({
-        "name":   "Groq-2",
-        "client": OpenAI(
-            api_key     = os.getenv("GROQ_API_KEY_2"),
-            base_url    = "https://api.groq.com/openai/v1",
-            max_retries = 0,
-        ),
-        "model": "llama-3.3-70b-versatile",
-    })
+# Groq key pool: GROQ_API_KEY (primary) plus GROQ_API_KEY_2, _3, … up to _8.
+# Each key carries its own independent RPM/TPM/daily budget on the same fast LPU
+# model, so they all sit at the front of the chain as the workhorse pool — under
+# concurrent eval load the fallback loop rotates across them before ever reaching
+# Gemini/Mistral. Auto-discovered so adding a key to .env is the only step
+# needed; gaps are fine (a missing _3 doesn't stop _4 being picked up).
+_GROQ_KEY_ENVS = ["GROQ_API_KEY"] + [f"GROQ_API_KEY_{i}" for i in range(2, 9)]
+for _idx, _env in enumerate(_GROQ_KEY_ENVS, start=1):
+    _key = os.getenv(_env)
+    if _key:
+        _PROVIDERS.append({
+            "name":   f"Groq-{_idx}",
+            "client": OpenAI(
+                api_key     = _key,
+                base_url    = "https://api.groq.com/openai/v1",
+                max_retries = 0,
+            ),
+            "model": "llama-3.3-70b-versatile",
+        })
 
 if os.getenv("GEMINI_API_KEY"):
     _PROVIDERS.append({
@@ -274,10 +276,20 @@ def chat_completion(
 
             except Exception as e:
                 err_str = str(e).lower()
-                retryable = _is_retryable_rate_limit(err_str)
+                # Network/timeout errors: this one provider is unreachable right
+                # now (DNS, TCP, TLS, read timeout). Don't kill the whole request
+                # on it — fail over to the next provider, and treat it as
+                # retryable so a transient blip recovers on a backoff pass.
+                conn_err = isinstance(e, (APIConnectionError, APITimeoutError))
+                retryable = _is_retryable_rate_limit(err_str) or conn_err
                 if retryable or any(kw in err_str for kw in _SKIP_KEYWORDS):
                     saw_retryable = saw_retryable or retryable
-                    kind = "rate-limited (retryable)" if retryable else "skipped"
+                    if conn_err:
+                        kind = "unreachable (retryable)"
+                    elif retryable:
+                        kind = "rate-limited (retryable)"
+                    else:
+                        kind = "skipped"
                     print(f"[llm_client] {provider['name']} {kind} "
                           f"({type(e).__name__}: {str(e)[:120]}) — trying next provider...")
                     last_error = e

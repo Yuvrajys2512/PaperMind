@@ -23,8 +23,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -131,6 +133,30 @@ def evaluate_question(paper_id, question, qid, answers, *, use_evidence, use_jud
     return row
 
 
+def _eval_task(pid, question, qid, answers, *, use_evidence, use_judge, topk) -> dict:
+    """Thread-pool worker: score one question, never raise.
+
+    Returns a tagged dict — a finished row (``kind="row"``) or an error notice
+    (``kind="error"``) — so the caller owns all I/O and the pool keeps going on a
+    single bad question. The pipeline + retrieval here are read-only against
+    Chroma (ingestion completes before the pool starts), so concurrent calls are
+    safe.
+    """
+    try:
+        row = evaluate_question(
+            pid, question, qid, answers,
+            use_evidence=use_evidence, use_judge=use_judge, topk=topk,
+        )
+    except Exception as e:
+        return {"kind": "error", "msg": f"  Q ERROR ({qid}): {type(e).__name__}: {e}"}
+
+    jv = f" judge={row['judge_verdict']}" if row["judge_verdict"] else ""
+    msg = (f"  [{row['gold_type'][:6]:<6}] F1={row['answer_f1']:.2f} "
+           f"ans_ok={int(row['answerable_correct'])} "
+           f"ev_rec={_fmt(row['evidence_recall'])}{jv}  Q: {question[:60]}")
+    return {"kind": "row", "row": row, "msg": msg}
+
+
 def summarize(rows: list[dict]) -> dict:
     by_type = defaultdict(list)
     for r in rows:
@@ -196,6 +222,12 @@ def main() -> None:
     ap.add_argument("--no-evidence", action="store_true", help="skip evidence scoring")
     ap.add_argument("--skip-ingest", action="store_true",
                     help="assume papers already in the vector store (set by the ablation runner)")
+    ap.add_argument("--workers", type=int, default=4,
+                    help="concurrent questions (default 4). All papers are ingested "
+                         "first (sequentially), then the question loop runs in a thread "
+                         "pool — read-only against Chroma, so it's embarrassingly "
+                         "parallel. Higher values trip per-minute provider rate limits "
+                         "sooner; 1 = fully sequential.")
     ap.add_argument("--out", default=None, help="JSONL output path")
     args = ap.parse_args()
 
@@ -207,43 +239,57 @@ def main() -> None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = Path(args.out) if args.out else _RESULTS_DIR / f"qasper_{args.split}_{ts}.jsonl"
 
+    workers = max(1, args.workers)
+    print(f"[eval] {len(picked)} papers | judge={args.judge} | "
+          f"evidence={not args.no_evidence} | workers={workers}")
+
+    # Phase 1 — ingest sequentially (Chroma writes are not safe to parallelise).
+    # Only papers that ingest cleanly contribute questions to the pool.
+    ready: list[tuple] = []
+    for pid, paper in picked:
+        if args.skip_ingest:
+            print(f"[eval] {pid} — {(paper.get('title') or '')[:70]} (skip-ingest)")
+            ready.append((pid, paper))
+        else:
+            print(f"[eval] ingesting {pid} — {(paper.get('title') or '')[:70]}")
+            summary = ingest_qasper_paper(pid, paper)
+            if not summary["success"]:
+                print(f"[eval]   SKIP (ingest failed): {summary.get('error')}")
+                continue
+            ready.append((pid, paper))
+
+    # Flatten to a flat pool of independent (paper, question) units.
+    tasks: list[tuple] = []
+    for pid, paper in ready:
+        for qi, (question, qid, answers) in enumerate(iter_questions(paper)):
+            if args.qs and qi >= args.qs:
+                break
+            if not answers:
+                continue
+            tasks.append((pid, question, qid, answers))
+
+    # Phase 2 — score questions concurrently (read-only against Chroma).
     rows: list[dict] = []
-    print(f"[eval] {len(picked)} papers | judge={args.judge} | evidence={not args.no_evidence}")
+    io_lock = threading.Lock()  # guards the output file, rows list, and stdout
+    print(f"[eval] scoring {len(tasks)} questions across {workers} worker(s) ...")
     with open(out_path, "w", encoding="utf-8") as fout:
-        for pid, paper in picked:
-            if args.skip_ingest:
-                print(f"\n[eval] {pid} — {(paper.get('title') or '')[:70]} (skip-ingest)")
-            else:
-                print(f"\n[eval] ingesting {pid} — {(paper.get('title') or '')[:70]}")
-                summary = ingest_qasper_paper(pid, paper)
-                if not summary["success"]:
-                    print(f"[eval]   SKIP (ingest failed): {summary.get('error')}")
-                    continue
-
-            for qi, (question, qid, answers) in enumerate(iter_questions(paper)):
-                if args.qs and qi >= args.qs:
-                    break
-                if not answers:
-                    continue
-                try:
-                    row = evaluate_question(
-                        pid, question, qid, answers,
-                        use_evidence=not args.no_evidence,
-                        use_judge=args.judge,
-                        topk=args.topk,
-                    )
-                except Exception as e:
-                    print(f"[eval]   Q ERROR ({qid}): {type(e).__name__}: {e}")
-                    continue
-
-                rows.append(row)
-                fout.write(json.dumps(row, ensure_ascii=False) + "\n")
-                fout.flush()
-                jv = f" judge={row['judge_verdict']}" if row["judge_verdict"] else ""
-                print(f"[eval]   [{row['gold_type'][:6]:<6}] F1={row['answer_f1']:.2f} "
-                      f"ans_ok={int(row['answerable_correct'])} "
-                      f"ev_rec={_fmt(row['evidence_recall'])}{jv}  "
-                      f"Q: {question[:60]}")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(_eval_task, pid, question, qid, answers,
+                            use_evidence=not args.no_evidence,
+                            use_judge=args.judge, topk=args.topk)
+                for (pid, question, qid, answers) in tasks
+            ]
+            for fut in as_completed(futures):
+                out = fut.result()
+                with io_lock:
+                    if out["kind"] == "error":
+                        print(f"[eval] {out['msg']}")
+                        continue
+                    rows.append(out["row"])
+                    fout.write(json.dumps(out["row"], ensure_ascii=False) + "\n")
+                    fout.flush()
+                    print(f"[eval] {out['msg']}")
 
     if not rows:
         print("[eval] no questions scored.")

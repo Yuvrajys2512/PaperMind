@@ -1,22 +1,13 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+﻿import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useAuth } from '@clerk/clerk-react'
-import { listPapers, deletePaper, queryPaperStream, getGlossary, getRecommendations, auditPaperStream, reviewPaperStream } from '../api'
+import { listPapers, deletePaper, queryPaperStream, getGlossary, getRecommendations } from '../api'
 import { track } from '../analytics'
 import ReactMarkdown from 'react-markdown'
-import { Document, Page, pdfjs } from 'react-pdf'
-import 'react-pdf/dist/Page/TextLayer.css'
-import 'react-pdf/dist/Page/AnnotationLayer.css'
-
-// pdf.js worker — Vite resolves this to a hashed asset URL at build time.
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString()
-
-/* ── HELPERS ─────────────────────────────────────────────────────── */
-function escapeHtml(str) {
-  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
+import { escapeHtml } from '../textUtils'
+import { MetricRing, METRIC_TOOLTIPS } from '../components/MetricRing'
+import PDFPreviewPanel from '../components/PDFPreviewPanel'
+import AuditPanel from '../components/AuditPanel'
+import ReviewPanel from '../components/ReviewPanel'
 
 /* ── COSMIC ORBS ─────────────────────────────────────────────────── */
 function CosmicOrbs() {
@@ -152,38 +143,47 @@ function StatusDot({ status }) {
   )
 }
 
-/* ── METRIC RING ─────────────────────────────────────────────────── */
-function MetricRing({ label, value, isPercentage = false, accent = 'cyan' }) {
-  const [filled, setFilled] = useState(false)
-  useEffect(() => { const t = setTimeout(() => setFilled(true), 120); return () => clearTimeout(t) }, [])
+// Single source of truth for the metric row. Adding a metric = one entry here;
+// both the live answer card and the side-by-side compare view render from this,
+// so the row can be reordered or relocated without touching call sites.
+// Accent is intentionally left to the caller (presentational, differs per view).
+function answerMetrics(result) {
+  if (!result) return []
+  const { confidence, faithfulness, answer_relevancy, retrieval, numeric } = result
 
-  const radius = 20
-  const circumference = 2 * Math.PI * radius
-  const pct = isPercentage ? Math.min(value, 100) : Math.min(value * 100, 100)
-  const offset = circumference - (filled ? (pct / 100) * circumference : 0)
-  const strokeColor = accent === 'cyan' ? '#00f5ff' : accent === 'violet' ? '#a78bfa' : '#60a5fa'
-  const glowColor   = accent === 'cyan' ? 'rgba(0,245,255,0.6)' : accent === 'violet' ? 'rgba(167,139,250,0.6)' : 'rgba(96,165,250,0.6)'
-  const displayValue = isPercentage ? value.toFixed(1) + '%' : value.toFixed(2)
+  const list = [
+    { key: 'confidence',   label: 'Confidence',   value: confidence ?? 0,        isPercentage: true },
+    { key: 'faithfulness', label: 'Faithfulness', value: faithfulness || 0 },
+    { key: 'relevancy',    label: 'Relevancy',    value: answer_relevancy || 0 },
+  ]
 
-  return (
-    <div className="flex flex-col items-center gap-1.5">
-      <div className="relative">
-        <svg width="52" height="52" viewBox="0 0 52 52">
-          <circle cx="26" cy="26" r={radius} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="3" />
-          <circle cx="26" cy="26" r={radius} fill="none" stroke={strokeColor} strokeWidth="3"
-            strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset}
-            transform="rotate(-90 26 26)"
-            style={{ transition: 'stroke-dashoffset 1.1s cubic-bezier(0.4,0,0.2,1)', filter: `drop-shadow(0 0 5px ${glowColor})` }} />
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center"
-          style={{ fontFamily: 'var(--font-mono)', fontSize: '8px', color: strokeColor, fontWeight: 600 }}>
-          {displayValue}
-        </div>
-      </div>
-      <span className="text-[8px] uppercase tracking-[0.18em] text-gray-600 font-bold">{label}</span>
-    </div>
-  )
+  if (retrieval?.score != null) {
+    list.push({
+      key: 'retrieval', label: 'Retrieval', value: retrieval.score, isPercentage: true,
+      tooltip: {
+        title: 'Retrieval',
+        body: `${METRIC_TOOLTIPS.retrieval.body} This answer drew on ${retrieval.chunks_used} ${retrieval.chunks_used === 1 ? 'passage' : 'passages'}, ${retrieval.strong_chunks} strongly relevant; best match ${Math.round(retrieval.top_relevance * 100)}%.`,
+      },
+    })
+  }
+
+  if (numeric?.total > 0) {
+    const missing = numeric.ungrounded?.length ? ` Not found in the paper: ${numeric.ungrounded.join(', ')}.` : ''
+    list.push({
+      key: 'numbers', label: 'Numbers', value: numeric.score, isPercentage: true,
+      tooltip: {
+        title: 'Numbers',
+        body: `${METRIC_TOOLTIPS.numbers.body} ${numeric.grounded} of ${numeric.total} ${numeric.total === 1 ? 'figure' : 'figures'} traced to the source.${missing}`,
+      },
+    })
+  }
+
+  return list
 }
+
+// Per-key accent for the main answer card (compare view overrides with a single
+// paper-tinted accent). Unknown keys fall back to blue.
+const LIVE_METRIC_ACCENTS = { confidence: 'cyan', faithfulness: 'violet' }
 
 /* ── SPARK LINE ──────────────────────────────────────────────────── */
 function SparkLine({ scores }) {
@@ -208,288 +208,6 @@ function SparkLine({ scores }) {
         strokeLinecap="round" strokeLinejoin="round"
         style={{ filter: 'drop-shadow(0 0 3px rgba(0,245,255,0.7))' }} />
     </svg>
-  )
-}
-
-/* ── PDF PREVIEW PANEL ───────────────────────────────────────────── */
-// Collapse whitespace + lowercase so PDF text-layer fragments can be matched
-// against the cited evidence chunk regardless of line-wrapping differences.
-function normalizeForMatch(s) {
-  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim()
-}
-
-function PDFPreviewPanel({ pdfUrl, title, page, highlight, onClose }) {
-  const panelRef  = useRef()
-  const scrollRef = useRef()
-  const { getToken } = useAuth()
-
-  // The Document loader wants a clean URL; the `#page=` hash is only useful
-  // for the native "open in new tab" fallback.
-  const fileUrl = useMemo(() => (pdfUrl || '').split('#')[0], [pdfUrl])
-
-  const initialPage = useMemo(() => {
-    const p = parseInt(page, 10)
-    return Number.isFinite(p) && p > 0 ? p : 1
-  }, [page])
-
-  const [numPages,   setNumPages]   = useState(null)
-  const [pageNumber, setPageNumber] = useState(initialPage)
-  const [width,      setWidth]      = useState(0)
-  const [loadError,  setLoadError]  = useState(false)
-  // /papers/{id}/pdf is auth-gated; pdf.js's internal fetch for <Document file>
-  // doesn't go through api.js, so it needs its own Authorization header.
-  const [docFile,    setDocFile]    = useState(null)
-
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      const token = await getToken()
-      if (!cancelled) {
-        setDocFile({ url: fileUrl, httpHeaders: token ? { Authorization: `Bearer ${token}` } : {} })
-      }
-    })()
-    return () => { cancelled = true }
-  }, [fileUrl, getToken])
-
-  // Evidence text to highlight, normalized once.
-  const needle = useMemo(() => normalizeForMatch(highlight), [highlight])
-
-  // Close on Escape
-  useEffect(() => {
-    const onKey = e => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  // Track the scroll container's width so the page renders to fit.
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const update = () => setWidth(Math.max(0, el.clientWidth - 32))
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-
-  // Close on backdrop click (not panel click)
-  const handleBackdrop = e => {
-    if (e.target === e.currentTarget) onClose()
-  }
-
-  // Wrap text-layer fragments that belong to the cited chunk in <mark>.
-  // The chunk was extracted from this same PDF, so its line fragments are
-  // substrings of the evidence text — matching them reproduces the span.
-  const textRenderer = useCallback((item) => {
-    const str = item?.str || ''
-    const safe = escapeHtml(str)
-    if (!needle) return safe
-    const frag = normalizeForMatch(str)
-    if (frag.length >= 5 && needle.includes(frag)) {
-      return `<mark class="pm-pdf-mark">${safe}</mark>`
-    }
-    return safe
-  }, [needle])
-
-  // After the text layer renders, scroll the first highlight into view.
-  const handleTextLayer = useCallback(() => {
-    const root = scrollRef.current
-    if (!root) return
-    const first = root.querySelector('.pm-pdf-mark')
-    if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [])
-
-  const goPrev = () => setPageNumber(n => Math.max(1, n - 1))
-  const goNext = () => setPageNumber(n => Math.min(numPages || n, n + 1))
-
-  const tabUrl = `${fileUrl}#page=${pageNumber}`
-
-  // Plain <a href> navigation can't carry an Authorization header, and the
-  // PDF route is auth-gated — fetch it as a blob with the token instead and
-  // open that. Falls back to the direct URL if the fetch fails.
-  const handleOpenInTab = useCallback(async (e) => {
-    e.preventDefault()
-    e.stopPropagation()
-    try {
-      const token = await getToken()
-      const res = await fetch(fileUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      if (!res.ok) throw new Error('Failed to fetch PDF')
-      const blobUrl = URL.createObjectURL(await res.blob())
-      window.open(`${blobUrl}#page=${pageNumber}`, '_blank', 'noopener,noreferrer')
-    } catch {
-      window.open(tabUrl, '_blank', 'noopener,noreferrer')
-    }
-  }, [fileUrl, pageNumber, tabUrl, getToken])
-
-  const navBtnStyle = (disabled) => ({
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    width: 22, height: 22, borderRadius: 5, flexShrink: 0,
-    color: disabled ? 'rgba(156,163,175,0.2)' : 'rgba(156,163,175,0.6)',
-    border: '1px solid rgba(255,255,255,0.06)',
-    background: 'transparent',
-    cursor: disabled ? 'default' : 'pointer',
-  })
-
-  return (
-    <div
-      onClick={handleBackdrop}
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(6px)',
-        zIndex: 10000,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-    >
-      <style>{`
-        .pm-pdf-mark {
-          background: rgba(0,245,255,0.38);
-          color: transparent;
-          border-radius: 2px;
-          box-shadow: 0 0 0 1px rgba(0,245,255,0.3);
-        }
-      `}</style>
-      <div
-        ref={panelRef}
-        style={{
-          width: 'min(720px, 92vw)',
-          height: '85vh',
-          background: 'rgba(6,6,22,0.97)',
-          border: '1px solid rgba(0,245,255,0.18)',
-          borderRadius: 16,
-          boxShadow: '0 32px 80px rgba(0,0,0,0.9), 0 0 0 1px rgba(0,245,255,0.06)',
-          display: 'flex', flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Header */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          padding: '10px 16px',
-          borderBottom: '1px solid rgba(255,255,255,0.05)',
-          flexShrink: 0,
-        }}>
-          <span style={{
-            width: 6, height: 6, borderRadius: '50%',
-            background: 'rgba(0,245,255,0.8)',
-            boxShadow: '0 0 8px rgba(0,245,255,0.7)',
-            flexShrink: 0,
-          }} />
-          <span style={{
-            flex: 1, fontSize: 11, fontFamily: 'var(--font-mono)',
-            color: 'rgba(0,245,255,0.7)',
-            textTransform: 'uppercase', letterSpacing: '0.15em',
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-          }}>
-            {title}
-          </span>
-          {/* Page navigation */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 4 }}>
-            <button onClick={goPrev} disabled={pageNumber <= 1} title="Previous page" style={navBtnStyle(pageNumber <= 1)}>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
-            </button>
-            <span style={{
-              fontSize: 10, fontFamily: 'var(--font-mono)',
-              color: 'rgba(156,163,175,0.55)', minWidth: 48, textAlign: 'center',
-            }}>
-              p.{pageNumber}{numPages ? ` / ${numPages}` : ''}
-            </span>
-            <button onClick={goNext} disabled={!!numPages && pageNumber >= numPages} title="Next page" style={navBtnStyle(!!numPages && pageNumber >= numPages)}>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-            </button>
-          </div>
-          {/* Open in tab button */}
-          <a
-            href={tabUrl} target="_blank" rel="noopener noreferrer"
-            onClick={handleOpenInTab}
-            title="Open in new tab"
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: 26, height: 26, borderRadius: 6, flexShrink: 0,
-              color: 'rgba(156,163,175,0.5)',
-              border: '1px solid rgba(255,255,255,0.06)',
-              background: 'transparent',
-              transition: 'color 0.15s, border-color 0.15s',
-              textDecoration: 'none',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.color = 'rgba(0,245,255,0.8)'; e.currentTarget.style.borderColor = 'rgba(0,245,255,0.25)' }}
-            onMouseLeave={e => { e.currentTarget.style.color = 'rgba(156,163,175,0.5)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)' }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
-            </svg>
-          </a>
-          {/* Close button */}
-          <button
-            onClick={onClose}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: 26, height: 26, borderRadius: 6, flexShrink: 0,
-              color: 'rgba(156,163,175,0.5)',
-              border: '1px solid rgba(255,255,255,0.06)',
-              background: 'transparent',
-              cursor: 'pointer',
-              transition: 'color 0.15s, border-color 0.15s',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.color = 'rgba(239,68,68,0.8)'; e.currentTarget.style.borderColor = 'rgba(239,68,68,0.25)' }}
-            onMouseLeave={e => { e.currentTarget.style.color = 'rgba(156,163,175,0.5)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)' }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-
-        {/* PDF render surface */}
-        <div
-          ref={scrollRef}
-          style={{
-            flex: 1, overflow: 'auto', padding: 16,
-            display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
-            background: 'rgba(0,0,0,0.35)',
-          }}
-        >
-          {loadError ? (
-            <div style={{
-              margin: 'auto', textAlign: 'center', maxWidth: 320,
-              color: 'rgba(156,163,175,0.7)', fontSize: 13, lineHeight: 1.6,
-            }}>
-              Couldn't render the PDF inline.{' '}
-              <a href={tabUrl} target="_blank" rel="noopener noreferrer"
-                onClick={handleOpenInTab}
-                style={{ color: 'rgba(0,245,255,0.8)' }}>
-                Open it in a new tab
-              </a>.
-            </div>
-          ) : !docFile ? (
-            <div style={{ margin: 'auto', color: 'rgba(156,163,175,0.6)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>Loading PDF…</div>
-          ) : (
-            <Document
-              file={docFile}
-              onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-              onLoadError={() => setLoadError(true)}
-              loading={<div style={{ margin: 'auto', color: 'rgba(156,163,175,0.6)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>Loading PDF…</div>}
-              error={<div style={{ margin: 'auto', color: 'rgba(248,113,113,0.7)', fontSize: 12 }}>Failed to load PDF.</div>}
-            >
-              <Page
-                pageNumber={pageNumber}
-                width={width || undefined}
-                customTextRenderer={textRenderer}
-                onRenderTextLayerSuccess={handleTextLayer}
-                renderAnnotationLayer={false}
-                loading={<div style={{ margin: 'auto', color: 'rgba(156,163,175,0.6)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>Rendering page…</div>}
-              />
-            </Document>
-          )}
-        </div>
-      </div>
-    </div>
   )
 }
 
@@ -593,6 +311,20 @@ function SourceChip({ source, paperId }) {
 }
 
 /* ── EVIDENCE GRADING ────────────────────────────────────────────── */
+// Turns the DIRECT/INFERRED/removed mix into a one-line, plain-language verdict.
+// `ratio` is direct ÷ (direct + inferred) — i.e. how much of what survived is
+// explicitly stated vs. the model connecting dots.
+function evidenceVerdict(directRatio, removedCount) {
+  let head, tone
+  if (directRatio >= 0.75)      { head = 'Mostly stated directly in the paper'; tone = 'cyan' }
+  else if (directRatio >= 0.45) { head = 'A mix of direct quotes and inference'; tone = 'amber' }
+  else                          { head = 'Inference-heavy — read with more care'; tone = 'amber' }
+  const tail = removedCount > 0
+    ? ` · ${removedCount} unsupported ${removedCount === 1 ? 'claim' : 'claims'} dropped`
+    : ''
+  return { head: head + tail, tone }
+}
+
 function EvidenceGrading({ grading }) {
   const [expanded, setExpanded] = useState(false)
   if (!grading || grading.grading_failed || !grading.grades?.length) return null
@@ -604,10 +336,29 @@ function EvidenceGrading({ grading }) {
 
   if (directCount === 0 && inferredCount === 0 && removedCount === 0) return null
 
+  // Proportions across everything the grader saw (kept + removed) so the bar
+  // honestly reflects what was thrown away, not just what survived.
+  const total       = directCount + inferredCount + removedCount
+  const directPct   = Math.round((directCount   / total) * 100)
+  const inferredPct = Math.round((inferredCount / total) * 100)
+  const removedPct  = Math.max(0, 100 - directPct - inferredPct)
+
+  // Verdict reads off the kept mix (direct vs inferred), independent of removals.
+  const kept        = directCount + inferredCount
+  const directRatio = kept > 0 ? directCount / kept : 1
+  const verdict     = evidenceVerdict(directRatio, removedCount)
+  const verdictColor = verdict.tone === 'cyan' ? 'rgb(34,211,238)' : 'rgb(251,191,36)'
+
+  const segments = [
+    { pct: directPct,   color: 'rgba(34,211,238,0.85)',  glow: 'rgba(0,245,255,0.5)',   label: `${directCount} direct (${directPct}%) — explicitly stated in the paper` },
+    { pct: inferredPct, color: 'rgba(251,191,36,0.85)',  glow: 'rgba(251,191,36,0.5)',  label: `${inferredCount} inferred (${inferredPct}%) — follows from the paper but not stated outright` },
+    { pct: removedPct,  color: 'rgba(248,113,113,0.85)', glow: 'rgba(248,113,113,0.5)', label: `${removedCount} removed (${removedPct}%) — unsupported claims dropped before you saw them` },
+  ].filter(s => s.pct > 0)
+
   return (
     <div className="mt-6 pt-5 border-t border-white/[0.04]">
       <div className="flex items-center justify-between mb-3">
-        <p className="text-[10px] uppercase tracking-[0.2em] text-gray-600 font-semibold">Evidence Quality</p>
+        <p className="text-[10px] uppercase tracking-[0.2em] text-gray-600 font-semibold">Evidence Composition</p>
         {sentences.length > 0 && (
           <button onClick={() => setExpanded(!expanded)}
             className="text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-400 transition-colors font-bold">
@@ -615,15 +366,36 @@ function EvidenceGrading({ grading }) {
           </button>
         )}
       </div>
+
+      {/* Stacked proportion bar — the hero. One glance = how the answer is grounded. */}
+      <div className="flex w-full h-2 rounded-full overflow-hidden mb-2.5"
+        style={{ background: 'rgba(255,255,255,0.04)' }}>
+        {segments.map((s, i) => (
+          <div key={i} title={s.label}
+            style={{
+              width: `${s.pct}%`,
+              background: s.color,
+              boxShadow: `0 0 8px ${s.glow}`,
+              transition: 'width 0.9s cubic-bezier(0.4,0,0.2,1)',
+            }} />
+        ))}
+      </div>
+
+      {/* Plain-language verdict */}
+      <p className="text-[11px] leading-snug mb-3" style={{ color: verdictColor }}>
+        {verdict.head}
+      </p>
+
+      {/* Legend chips with percentages */}
       <div className="flex flex-wrap gap-2">
         {directCount > 0 && (
-          <span className="evidence-chip cyan"><span className="chip-dot cyan" />{directCount} Direct</span>
+          <span className="evidence-chip cyan"><span className="chip-dot cyan" />{directCount} Direct · {directPct}%</span>
         )}
         {inferredCount > 0 && (
-          <span className="evidence-chip amber"><span className="chip-dot amber" />{inferredCount} Inferred</span>
+          <span className="evidence-chip amber"><span className="chip-dot amber" />{inferredCount} Inferred · {inferredPct}%</span>
         )}
         {removedCount > 0 && (
-          <span className="evidence-chip red"><span className="chip-dot red" />{removedCount} Removed</span>
+          <span className="evidence-chip red"><span className="chip-dot red" />{removedCount} Removed · {removedPct}%</span>
         )}
       </div>
       {expanded && sentences.length > 0 && (
@@ -1239,11 +1011,13 @@ function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory, highlight }
             </Reveal>
           )}
 
-          {/* Metrics row */}
+          {/* Metrics row — data-driven from answerMetrics(); see helper above. */}
           <Reveal show={stage >= 1} className="flex items-center gap-5 mt-8 pt-6 border-t border-white/[0.04]">
-            <MetricRing label="Confidence"  value={confidence}          isPercentage={true} accent="cyan"   />
-            <MetricRing label="Faithfulness" value={faithfulness || 0}                      accent="violet" />
-            <MetricRing label="Relevancy"   value={answer_relevancy || 0}                   accent="blue"   />
+            {answerMetrics(msg.content).map(m => (
+              <MetricRing key={m.key} label={m.label} value={m.value}
+                isPercentage={!!m.isPercentage} accent={LIVE_METRIC_ACCENTS[m.key] || 'blue'}
+                tooltip={m.tooltip} />
+            ))}
             <SparkLine scores={scoreHistory} />
           </Reveal>
 
@@ -1490,449 +1264,6 @@ function RecsPanel({ paperId, onClose, onImport }) {
   )
 }
 
-/* ── CLAIM AUDIT PANEL ───────────────────────────────────────────── */
-const AUDIT_STAGES = [
-  { key: 'reading',    label: 'Reading paper'     },
-  { key: 'extracting', label: 'Extracting claims' },
-  { key: 'gathering',  label: 'Tracing evidence'  },
-  { key: 'auditing',   label: 'Auditing claims'   },
-]
-
-const VERDICT_STYLE = {
-  GROUNDED:       { label: 'Grounded',  color: 'rgba(52,211,153,0.95)',  bg: 'rgba(52,211,153,0.08)',  border: 'rgba(52,211,153,0.25)',  dot: '#34d399' },
-  OVERCLAIM:      { label: 'Overclaim', color: 'rgba(251,191,36,0.97)',  bg: 'rgba(251,191,36,0.09)',  border: 'rgba(251,191,36,0.3)',   dot: '#fbbf24' },
-  SCOPE_MISMATCH: { label: 'Scope',     color: 'rgba(248,113,113,0.97)', bg: 'rgba(248,113,113,0.09)', border: 'rgba(248,113,113,0.3)',  dot: '#f87171' },
-  UNVERIFIABLE:   { label: 'Unverified',color: 'rgba(156,163,175,0.95)', bg: 'rgba(156,163,175,0.06)', border: 'rgba(255,255,255,0.12)', dot: '#9ca3af' },
-}
-
-function AuditClaimCard({ claim, onViewEvidence }) {
-  const s = VERDICT_STYLE[claim.verdict] || VERDICT_STYLE.UNVERIFIABLE
-  return (
-    <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)' }}>
-      <div className="flex items-center justify-between mb-2.5">
-        <span className="text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full flex items-center gap-1.5"
-          style={{ background: s.bg, border: `1px solid ${s.border}`, color: s.color }}>
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: s.dot, boxShadow: `0 0 5px ${s.dot}` }} />
-          {s.label}
-        </span>
-        <span className="text-[8px] uppercase tracking-wider text-gray-700" style={{ fontFamily: 'var(--font-mono)' }}>
-          {claim.source_section}
-        </span>
-      </div>
-      <p className="text-gray-200 text-xs leading-relaxed mb-2">{claim.claim}</p>
-      {claim.why && (
-        <p className="text-[11px] leading-relaxed mb-2.5" style={{ color: s.color }}>{claim.why}</p>
-      )}
-      {claim.evidence && (
-        <button onClick={() => onViewEvidence(claim)}
-          className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider font-bold px-2.5 py-1 rounded-lg transition-all"
-          style={{ background: 'rgba(0,245,255,0.06)', border: '1px solid rgba(0,245,255,0.2)', color: 'rgba(0,245,255,0.85)' }}>
-          <span className="w-1 h-1 rounded-full bg-cyan-400" />
-          {claim.evidence.section_type === 'table' ? 'TABLE · ' : ''}{claim.evidence.section} · p.{claim.evidence.page}
-        </button>
-      )}
-    </div>
-  )
-}
-
-function AuditPanel({ paperId, onClose }) {
-  const [report,   setReport]   = useState(null)
-  const [loading,  setLoading]  = useState(true)
-  const [progress, setProgress] = useState([])
-  const [error,    setError]    = useState('')
-  const [showGrounded, setShowGrounded] = useState(false)
-  const [evidence, setEvidence] = useState(null)  // claim whose evidence is open
-
-  // Manual re-run (button / retry). setState in an event handler is fine.
-  const run = useCallback((force = false) => {
-    setLoading(true); setError(''); setProgress([]); setReport(null); setShowGrounded(false)
-    auditPaperStream(paperId, ({ type, data }) => {
-      if (type === 'progress') setProgress(prev => [...prev, data.stage])
-    }, force)
-      .then(setReport)
-      .catch(e => setError(e.message || 'Audit failed'))
-      .finally(() => setLoading(false))
-  }, [paperId])
-
-  // Initial load. Kept inline (not via run()) so no setState fires synchronously
-  // in the effect body — initial state already is loading/empty. A cancel flag
-  // drops late results if the panel closes or the paper switches mid-audit.
-  useEffect(() => {
-    let cancelled = false
-    auditPaperStream(paperId, ({ type, data }) => {
-      if (type === 'progress' && !cancelled) setProgress(prev => [...prev, data.stage])
-    }, false)
-      .then(r => { if (!cancelled) setReport(r) })
-      .catch(e => { if (!cancelled) setError(e.message || 'Audit failed') })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [paperId])
-
-  const latestStage = progress[progress.length - 1]
-  const claims   = report?.claims || []
-  const flagged  = claims.filter(c => c.verdict !== 'GROUNDED')
-  const grounded = claims.filter(c => c.verdict === 'GROUNDED')
-  const pct = report?.trust_score != null ? Math.round(report.trust_score * 100) : null
-
-  return (
-    <>
-      <div className="panel-slide-in fixed top-0 right-0 bottom-0 z-[80] flex flex-col"
-        style={{ width: 420, background: 'rgba(4,4,16,0.97)', borderLeft: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(32px)' }}>
-        <div className="flex items-center justify-between px-6 py-5 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-          <div>
-            <p className="text-[9px] uppercase tracking-[0.22em] text-cyan-400/60 font-bold mb-0.5" style={{ fontFamily: 'var(--font-mono)' }}>Integrity</p>
-            <h2 className="text-white font-semibold text-sm" style={{ fontFamily: 'var(--font-display)' }}>Claim Audit</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            {report && !loading && (
-              <button onClick={() => run(true)} title="Re-run audit"
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:text-cyan-300 hover:bg-white/[0.06] transition-all">
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </button>
-            )}
-            <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:text-white hover:bg-white/[0.06] transition-all">×</button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-5 custom-scrollbar">
-          {/* Loading — staged checklist */}
-          {loading && (
-            <div className="py-4">
-              <div className="space-y-3">
-                {AUDIT_STAGES.map(st => {
-                  const seenIdx = progress.indexOf(st.key)
-                  const isActive = latestStage === st.key
-                  const isDone   = seenIdx !== -1 && !isActive
-                  return (
-                    <div key={st.key} className="flex items-center gap-3">
-                      <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">
-                        {isDone   && <span className="w-2.5 h-2.5 rounded-full bg-cyan-400/60" />}
-                        {isActive && <span className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" style={{ boxShadow: '0 0 8px rgba(0,245,255,0.8)' }} />}
-                        {!isDone && !isActive && <span className="w-2 h-2 rounded-full border border-white/10" />}
-                      </div>
-                      <span className={`text-xs ${isActive ? 'text-cyan-300' : isDone ? 'text-cyan-400/55' : 'text-gray-700'}`}
-                        style={{ fontFamily: 'var(--font-mono)' }}>{st.label}</span>
-                    </div>
-                  )
-                })}
-              </div>
-              <p className="text-[10px] text-gray-700 mt-5 leading-relaxed">
-                Checking each headline claim against the paper's own results and tables. This can take up to a minute.
-              </p>
-            </div>
-          )}
-
-          {error && !loading && (
-            <div className="py-10 text-center">
-              <p className="text-red-400/60 text-xs mb-4">{error}</p>
-              <button onClick={() => run(true)}
-                className="text-[10px] uppercase tracking-wider font-bold px-4 py-2 rounded-lg"
-                style={{ background: 'rgba(0,245,255,0.08)', border: '1px solid rgba(0,245,255,0.25)', color: 'rgba(0,245,255,0.85)' }}>
-                Try again
-              </button>
-            </div>
-          )}
-
-          {report && !loading && report.audit_failed && (
-            <p className="text-gray-600 text-xs text-center py-10">{report.reason || 'Could not audit this paper.'}</p>
-          )}
-
-          {report && !loading && !report.audit_failed && claims.length === 0 && (
-            <p className="text-gray-600 text-xs text-center py-10">{report.reason || 'No checkable claims found in this paper.'}</p>
-          )}
-
-          {report && !loading && !report.audit_failed && claims.length > 0 && (
-            <>
-              {/* Headline */}
-              <div className="flex items-center gap-4 mb-6 rounded-2xl p-4" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                {pct != null && <MetricRing label="grounded" value={pct} isPercentage accent="cyan" />}
-                <div className="flex-1">
-                  <p className="text-white text-sm font-semibold mb-0.5" style={{ fontFamily: 'var(--font-display)' }}>
-                    {report.claims_checked} claim{report.claims_checked === 1 ? '' : 's'} checked
-                  </p>
-                  <p className="text-[11px] text-gray-500">
-                    <span className="text-emerald-400/80">{report.grounded} grounded</span>
-                    {report.flagged > 0 && <> · <span className="text-amber-400/80">{report.flagged} to review</span></>}
-                  </p>
-                  {report.cached && <p className="text-[8px] uppercase tracking-wider text-gray-700 mt-1.5" style={{ fontFamily: 'var(--font-mono)' }}>cached · re-run to refresh</p>}
-                </div>
-              </div>
-
-              <p className="text-[10px] text-gray-700 leading-relaxed mb-5">
-                Flags are prompts to read critically, not verdicts on the paper — always open the evidence and judge for yourself.
-              </p>
-
-              {/* Flagged claims (the interesting ones) */}
-              {flagged.length > 0 ? (
-                <div className="space-y-3">
-                  {flagged.map((c, i) => (
-                    <AuditClaimCard key={i} claim={c} onViewEvidence={setEvidence} />
-                  ))}
-                </div>
-              ) : (
-                <p className="text-emerald-400/70 text-xs text-center py-4">Every claim is backed by in-paper evidence.</p>
-              )}
-
-              {/* Grounded claims behind a toggle */}
-              {grounded.length > 0 && (
-                <div className="mt-5">
-                  <button onClick={() => setShowGrounded(v => !v)}
-                    className="text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-400 transition-colors font-bold">
-                    {showGrounded ? 'Hide' : 'Show'} {grounded.length} grounded claim{grounded.length === 1 ? '' : 's'}
-                  </button>
-                  {showGrounded && (
-                    <div className="space-y-3 mt-3 animate-slide-down">
-                      {grounded.map((c, i) => (
-                        <AuditClaimCard key={i} claim={c} onViewEvidence={setEvidence} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {evidence?.evidence && (
-        <PDFPreviewPanel
-          pdfUrl={`/api/papers/${paperId}/pdf#page=${evidence.evidence.page}`}
-          title={`${evidence.evidence.section_type === 'table' ? 'TABLE · ' : ''}${evidence.evidence.section}`}
-          page={evidence.evidence.page}
-          highlight={evidence.evidence.quote}
-          onClose={() => setEvidence(null)}
-        />
-      )}
-    </>
-  )
-}
-
-/* ── REVIEWER / WEAKNESS AUDIT PANEL ─────────────────────────────────
-   Complement of AuditPanel: instead of "do the claims match the paper's own
-   evidence?", this grades the paper against a generic ML/NLP venue's
-   methodological norms (baselines, ablations, error bars, N, threats, related
-   work). Same SSE + R2-cache architecture; OK / WEAK / MISSING per dimension. */
-const REVIEW_STAGES = [
-  { key: 'reading',   label: 'Reading paper'     },
-  { key: 'gathering', label: 'Tracing evidence'  },
-  { key: 'reviewing', label: 'Reviewing vs norms' },
-]
-
-const REVIEW_VERDICT_STYLE = {
-  OK:      { label: 'Adequate', color: 'rgba(52,211,153,0.95)',  bg: 'rgba(52,211,153,0.08)',  border: 'rgba(52,211,153,0.25)',  dot: '#34d399' },
-  WEAK:    { label: 'Weak',     color: 'rgba(251,191,36,0.97)',  bg: 'rgba(251,191,36,0.09)',  border: 'rgba(251,191,36,0.3)',   dot: '#fbbf24' },
-  MISSING: { label: 'Missing',  color: 'rgba(248,113,113,0.97)', bg: 'rgba(248,113,113,0.09)', border: 'rgba(248,113,113,0.3)',  dot: '#f87171' },
-}
-
-function ReviewDimensionCard({ dim, onViewEvidence }) {
-  const s = REVIEW_VERDICT_STYLE[dim.verdict] || REVIEW_VERDICT_STYLE.MISSING
-  return (
-    <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)' }}>
-      <div className="flex items-center justify-between mb-2.5">
-        <span className="text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full flex items-center gap-1.5"
-          style={{ background: s.bg, border: `1px solid ${s.border}`, color: s.color }}>
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: s.dot, boxShadow: `0 0 5px ${s.dot}` }} />
-          {s.label}
-        </span>
-        <span className="text-[8px] uppercase tracking-wider text-gray-700" style={{ fontFamily: 'var(--font-mono)' }}>
-          {dim.label}
-        </span>
-      </div>
-      {dim.why && (
-        <p className="text-gray-200 text-xs leading-relaxed mb-2">{dim.why}</p>
-      )}
-      {dim.reviewer_question && (
-        <p className="text-[11px] leading-relaxed mb-2.5 italic" style={{ color: s.color }}>“{dim.reviewer_question}”</p>
-      )}
-      {dim.evidence && (
-        <button onClick={() => onViewEvidence(dim)}
-          className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider font-bold px-2.5 py-1 rounded-lg transition-all"
-          style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)', color: 'rgba(167,139,250,0.85)' }}>
-          <span className="w-1 h-1 rounded-full bg-violet-400" />
-          {dim.evidence.section_type === 'table' ? 'TABLE · ' : ''}{dim.evidence.section} · p.{dim.evidence.page}
-        </button>
-      )}
-    </div>
-  )
-}
-
-function ReviewPanel({ paperId, onClose }) {
-  const [report,   setReport]   = useState(null)
-  const [loading,  setLoading]  = useState(true)
-  const [progress, setProgress] = useState([])
-  const [error,    setError]    = useState('')
-  const [showOk,   setShowOk]   = useState(false)
-  const [evidence, setEvidence] = useState(null)  // dimension whose evidence is open
-
-  // Manual re-run (button / retry). setState in an event handler is fine.
-  const run = useCallback((force = false) => {
-    setLoading(true); setError(''); setProgress([]); setReport(null); setShowOk(false)
-    reviewPaperStream(paperId, ({ type, data }) => {
-      if (type === 'progress') setProgress(prev => [...prev, data.stage])
-    }, force)
-      .then(setReport)
-      .catch(e => setError(e.message || 'Review failed'))
-      .finally(() => setLoading(false))
-  }, [paperId])
-
-  // Initial load. Kept inline (not via run()) so no setState fires synchronously
-  // in the effect body — initial state already is loading/empty. A cancel flag
-  // drops late results if the panel closes or the paper switches mid-review.
-  useEffect(() => {
-    let cancelled = false
-    reviewPaperStream(paperId, ({ type, data }) => {
-      if (type === 'progress' && !cancelled) setProgress(prev => [...prev, data.stage])
-    }, false)
-      .then(r => { if (!cancelled) setReport(r) })
-      .catch(e => { if (!cancelled) setError(e.message || 'Review failed') })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [paperId])
-
-  const latestStage = progress[progress.length - 1]
-  const dims    = report?.dimensions || []
-  const flagged = dims.filter(d => d.verdict !== 'OK')
-  const passes  = dims.filter(d => d.verdict === 'OK')
-  const pct = report?.review_score != null ? Math.round(report.review_score * 100) : null
-
-  return (
-    <>
-      <div className="panel-slide-in fixed top-0 right-0 bottom-0 z-[80] flex flex-col"
-        style={{ width: 420, background: 'rgba(4,4,16,0.97)', borderLeft: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(32px)' }}>
-        <div className="flex items-center justify-between px-6 py-5 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-          <div>
-            <p className="text-[9px] uppercase tracking-[0.22em] font-bold mb-0.5" style={{ fontFamily: 'var(--font-mono)', color: 'rgba(167,139,250,0.6)' }}>Peer review</p>
-            <h2 className="text-white font-semibold text-sm" style={{ fontFamily: 'var(--font-display)' }}>Weakness Audit</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            {report && !loading && (
-              <button onClick={() => run(true)} title="Re-run review"
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:text-violet-300 hover:bg-white/[0.06] transition-all">
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </button>
-            )}
-            <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:text-white hover:bg-white/[0.06] transition-all">×</button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-5 custom-scrollbar">
-          {/* Loading — staged checklist */}
-          {loading && (
-            <div className="py-4">
-              <div className="space-y-3">
-                {REVIEW_STAGES.map(st => {
-                  const seenIdx = progress.indexOf(st.key)
-                  const isActive = latestStage === st.key
-                  const isDone   = seenIdx !== -1 && !isActive
-                  return (
-                    <div key={st.key} className="flex items-center gap-3">
-                      <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">
-                        {isDone   && <span className="w-2.5 h-2.5 rounded-full bg-violet-400/60" />}
-                        {isActive && <span className="w-3 h-3 rounded-full bg-violet-400 animate-pulse" style={{ boxShadow: '0 0 8px rgba(167,139,250,0.8)' }} />}
-                        {!isDone && !isActive && <span className="w-2 h-2 rounded-full border border-white/10" />}
-                      </div>
-                      <span className={`text-xs ${isActive ? 'text-violet-300' : isDone ? 'text-violet-400/55' : 'text-gray-700'}`}
-                        style={{ fontFamily: 'var(--font-mono)' }}>{st.label}</span>
-                    </div>
-                  )
-                })}
-              </div>
-              <p className="text-[10px] text-gray-700 mt-5 leading-relaxed">
-                Grading the paper against a reviewer's methodological checklist — baselines, ablations, error bars, sample size, threats to validity, related work. This can take up to a minute.
-              </p>
-            </div>
-          )}
-
-          {error && !loading && (
-            <div className="py-10 text-center">
-              <p className="text-red-400/60 text-xs mb-4">{error}</p>
-              <button onClick={() => run(true)}
-                className="text-[10px] uppercase tracking-wider font-bold px-4 py-2 rounded-lg"
-                style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', color: 'rgba(167,139,250,0.85)' }}>
-                Try again
-              </button>
-            </div>
-          )}
-
-          {report && !loading && report.review_failed && (
-            <p className="text-gray-600 text-xs text-center py-10">{report.reason || 'Could not review this paper.'}</p>
-          )}
-
-          {report && !loading && !report.review_failed && dims.length === 0 && (
-            <p className="text-gray-600 text-xs text-center py-10">{report.reason || 'No review dimensions could be assessed for this paper.'}</p>
-          )}
-
-          {report && !loading && !report.review_failed && dims.length > 0 && (
-            <>
-              {/* Headline */}
-              <div className="flex items-center gap-4 mb-6 rounded-2xl p-4" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                {pct != null && <MetricRing label="meets bar" value={pct} isPercentage accent="violet" />}
-                <div className="flex-1">
-                  <p className="text-white text-sm font-semibold mb-0.5" style={{ fontFamily: 'var(--font-display)' }}>
-                    {report.dimensions_checked} dimension{report.dimensions_checked === 1 ? '' : 's'} reviewed
-                  </p>
-                  <p className="text-[11px] text-gray-500">
-                    <span className="text-emerald-400/80">{report.ok} adequate</span>
-                    {report.weak > 0 && <> · <span className="text-amber-400/80">{report.weak} weak</span></>}
-                    {report.missing > 0 && <> · <span className="text-red-400/80">{report.missing} missing</span></>}
-                  </p>
-                  {report.cached && <p className="text-[8px] uppercase tracking-wider text-gray-700 mt-1.5" style={{ fontFamily: 'var(--font-mono)' }}>cached · re-run to refresh</p>}
-                </div>
-              </div>
-
-              <p className="text-[10px] text-gray-700 leading-relaxed mb-5">
-                A reviewer's-eye critique, not a verdict on the paper — retrieval can miss things, so open the evidence and judge for yourself.
-              </p>
-
-              {/* Flagged dimensions (the interesting ones) */}
-              {flagged.length > 0 ? (
-                <div className="space-y-3">
-                  {flagged.map((d, i) => (
-                    <ReviewDimensionCard key={i} dim={d} onViewEvidence={setEvidence} />
-                  ))}
-                </div>
-              ) : (
-                <p className="text-emerald-400/70 text-xs text-center py-4">The paper meets the bar on every reviewed dimension.</p>
-              )}
-
-              {/* Adequate dimensions behind a toggle */}
-              {passes.length > 0 && (
-                <div className="mt-5">
-                  <button onClick={() => setShowOk(v => !v)}
-                    className="text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-400 transition-colors font-bold">
-                    {showOk ? 'Hide' : 'Show'} {passes.length} adequate dimension{passes.length === 1 ? '' : 's'}
-                  </button>
-                  {showOk && (
-                    <div className="space-y-3 mt-3 animate-slide-down">
-                      {passes.map((d, i) => (
-                        <ReviewDimensionCard key={i} dim={d} onViewEvidence={setEvidence} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {evidence?.evidence && (
-        <PDFPreviewPanel
-          pdfUrl={`/api/papers/${paperId}/pdf#page=${evidence.evidence.page}`}
-          title={`${evidence.evidence.section_type === 'table' ? 'TABLE · ' : ''}${evidence.evidence.section}`}
-          page={evidence.evidence.page}
-          highlight={evidence.evidence.quote}
-          onClose={() => setEvidence(null)}
-        />
-      )}
-    </>
-  )
-}
-
 /* ── SEARCH BAR ──────────────────────────────────────────────────── */
 function SearchBar({ query, onChange, matchCount, onClose }) {
   const inputRef = useRef()
@@ -2039,11 +1370,12 @@ function PaperPane({ result, paperId, paperName, label, isNewest }) {
         </div>
       )}
 
-      {/* Metrics */}
+      {/* Metrics — same data-driven row as the main card, paper-tinted accent. */}
       <div className="flex items-center gap-4 pt-4 border-t" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
-        <MetricRing label="Confidence"   value={confidence}          isPercentage={true} accent={accent.ring} />
-        <MetricRing label="Faithfulness" value={faithfulness || 0}                       accent={accent.ring} />
-        <MetricRing label="Relevancy"    value={answer_relevancy || 0}                   accent={accent.ring} />
+        {answerMetrics(result).map(m => (
+          <MetricRing key={m.key} label={m.label} value={m.value}
+            isPercentage={!!m.isPercentage} accent={accent.ring} tooltip={m.tooltip} />
+        ))}
       </div>
 
       {/* Sources */}

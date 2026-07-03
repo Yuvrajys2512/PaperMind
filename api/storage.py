@@ -58,6 +58,14 @@ def _ensure_schema():
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_user_id ON papers (user_id)")
+        # paper_type distinguishes a normal reference paper from a user's own
+        # unpublished draft (pre-submission review mode). Every existing row
+        # predates this column and defaults to 'paper', which is exactly what
+        # it should be — no backfill needed.
+        conn.execute(
+            "ALTER TABLE papers ADD COLUMN IF NOT EXISTS paper_type TEXT NOT NULL DEFAULT 'paper'"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_user_type ON papers (user_id, paper_type)")
 
 
 _ensure_schema()
@@ -65,16 +73,16 @@ _ensure_schema()
 
 # ── Registry (Neon Postgres) ─────────────────────────────────────────────────
 
-def create_paper_record(original_filename: str, user_id: str, source_id: str = None) -> str:
+def create_paper_record(original_filename: str, user_id: str, source_id: str = None, paper_type: str = "paper") -> str:
     """Creates a new paper entry with status 'processing'. Returns the paper_id."""
     paper_id = str(uuid.uuid4())
     with _pool.connection() as conn:
         conn.execute(
             """
-            INSERT INTO papers (paper_id, user_id, filename, status, uploaded_at, source_id)
-            VALUES (%s, %s, %s, 'processing', %s, %s)
+            INSERT INTO papers (paper_id, user_id, filename, status, uploaded_at, source_id, paper_type)
+            VALUES (%s, %s, %s, 'processing', %s, %s, %s)
             """,
-            (paper_id, user_id, original_filename, datetime.now(timezone.utc), source_id),
+            (paper_id, user_id, original_filename, datetime.now(timezone.utc), source_id, paper_type),
         )
     return paper_id
 
@@ -111,17 +119,27 @@ def get_owned_paper(paper_id: str, user_id: str) -> dict | None:
     return paper
 
 
-def list_papers(user_id: str) -> list:
+def list_papers(user_id: str, paper_type: str | None = None) -> list:
     """Returns user_id's OWN paper records as a list, newest first. Deliberately
     excludes the shared demo set — quota enforcement counts this, so demo papers
     must never inflate a user's paper count. Use list_demo_papers() / the
-    /papers endpoint for the full visible library."""
+    /papers endpoint for the full visible library.
+
+    paper_type=None (default) returns every type, unchanged from before this
+    column existed — quota counting relies on that default counting drafts and
+    reference papers together. Pass 'paper' or 'draft' to filter to one kind."""
     with _pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                "SELECT * FROM papers WHERE user_id = %s ORDER BY uploaded_at DESC",
-                (user_id,),
-            )
+            if paper_type is None:
+                cur.execute(
+                    "SELECT * FROM papers WHERE user_id = %s ORDER BY uploaded_at DESC",
+                    (user_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM papers WHERE user_id = %s AND paper_type = %s ORDER BY uploaded_at DESC",
+                    (user_id, paper_type),
+                )
             return cur.fetchall()
 
 

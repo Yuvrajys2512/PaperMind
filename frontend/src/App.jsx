@@ -5,6 +5,8 @@ import UploadPage from './pages/UploadPage'
 import ChatPage from './pages/ChatPage'
 import DiscoverPage from './pages/DiscoverPage'
 import LibraryPage from './pages/LibraryPage'
+import DraftsPage from './pages/DraftsPage'
+import DraftReviewPage from './pages/DraftReviewPage'
 import RewritePage from './pages/RewritePage'
 import BillingPage from './pages/BillingPage'
 import AdminPage from './pages/AdminPage'
@@ -47,6 +49,7 @@ function AppPages() {
     return hasBillingReturn ? 'billing' : 'upload'
   })
   const [currentPaper, setCurrentPaper] = useState(null)
+  const [currentDraft, setCurrentDraft] = useState(null)
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has('billing')) {
@@ -80,6 +83,17 @@ function AppPages() {
       />
     )
   }
+  if (page === 'drafts') {
+    return (
+      <DraftsPage
+        onOpen={(draft) => { setCurrentDraft(draft); setPage('draftReview') }}
+        onBack={() => setPage('upload')}
+      />
+    )
+  }
+  if (page === 'draftReview') {
+    return <DraftReviewPage draft={currentDraft} onBack={() => setPage('drafts')} />
+  }
   if (page === 'rewrite') {
     return <RewritePage onBack={() => setPage('upload')} />
   }
@@ -94,6 +108,7 @@ function AppPages() {
       onPaperReady={handlePaperReady}
       onDiscover={() => setPage('discover')}
       onLibrary={() => setPage('library')}
+      onDrafts={() => setPage('drafts')}
       onRewrite={() => setPage('rewrite')}
       onBilling={() => setPage('billing')}
       onAdmin={isAdmin ? () => setPage('admin') : undefined}

@@ -18,7 +18,7 @@ from ingestion.claim_auditor import audit_paper
 from ingestion.reviewer_auditor import review_paper
 from ingestion.rewriter import rewrite_text
 from ingestion.llm_client import get_stats, reset_stats
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Depends, Request
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -152,6 +152,7 @@ async def upload_paper(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    paper_type: str = Form("paper"),
     user_id: str = Depends(enforce_paper_quota),
 ):
     req_id = getattr(request.state, 'req_id', 'unknown')
@@ -159,6 +160,8 @@ async def upload_paper(
 
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+    if paper_type not in ("paper", "draft"):
+        raise HTTPException(status_code=400, detail="paper_type must be 'paper' or 'draft'.")
 
     # Stream to a temp file with server-side validation: the bytes must
     # actually be a PDF (magic number), and stay under the size cap. A .pdf
@@ -198,7 +201,7 @@ async def upload_paper(
         )
         raise HTTPException(status_code=400, detail="Could not read the uploaded file.")
 
-    paper_id = create_paper_record(file.filename, user_id)
+    paper_id = create_paper_record(file.filename, user_id, paper_type=paper_type)
     try:
         upload_pdf(paper_id, temp_path)
         log_operation(
@@ -227,7 +230,7 @@ async def upload_paper(
 
     background_tasks.add_task(run_ingestion_from_storage, paper_id)
 
-    return {"paper_id": paper_id, "filename": file.filename, "status": "processing"}
+    return {"paper_id": paper_id, "filename": file.filename, "status": "processing", "paper_type": paper_type}
 
 
 @app.get("/status/{paper_id}")
@@ -239,12 +242,19 @@ def get_status(paper_id: str, user_id: str = Depends(get_current_user_id)):
 
 
 @app.get("/papers")
-def get_all_papers(user_id: str = Depends(get_current_user_id)):
+def get_all_papers(paper_type: str = "paper", user_id: str = Depends(get_current_user_id)):
     """The user's own papers (newest first) followed by the shared, read-only
     demo set. `is_demo` lets the frontend badge them and hide their delete
-    control — they're quota-exempt and not owned by the requester."""
-    own = [{**p, "is_demo": False} for p in list_papers(user_id)]
-    demo = [{**p, "is_demo": True} for p in list_demo_papers()]
+    control — they're quota-exempt and not owned by the requester.
+
+    paper_type defaults to 'paper' (today's behavior, unchanged) so every
+    existing caller keeps seeing only reference papers + the demo set. Pass
+    'draft' to list unpublished drafts instead — the demo set never contains
+    drafts, so it's omitted in that case."""
+    if paper_type not in ("paper", "draft"):
+        raise HTTPException(status_code=400, detail="paper_type must be 'paper' or 'draft'.")
+    own = [{**p, "is_demo": False} for p in list_papers(user_id, paper_type=paper_type)]
+    demo = [{**p, "is_demo": True} for p in list_demo_papers()] if paper_type == "paper" else []
     return own + demo
 
 

@@ -47,7 +47,17 @@ Decide the verdict honestly from the data:
 
 ## Known issues / risks
 
-- [ ] **Throughput is the bottleneck for any large run.** Mistral fallback is ~20–44s/q.
+- [~] **Throughput is the bottleneck for any large run.** Mistral fallback is ~20–44s/q.
+      - **Addressed for `analyze_grader`:** the question loop is now parallel via
+        `--workers N` (default 4). Each question is independent and read-only against
+        Chroma (ingestion runs sequentially first), so the loop is embarrassingly
+        parallel — N× speedup on the latency-bound (Mistral) portion. Validated
+        2026-06-22: 3 same-paper questions across 3 workers, no races; concurrent load
+        trips Groq RPM sooner but fails over to Gemini cleanly. `--workers 1` = old
+        sequential behaviour.
+      - **Next throughput levers:** (a) set `GROQ_API_KEY_2` (the chain already supports
+        "Groq-2") to roughly double fast-provider RPM/daily budget — zero code; (b) apply
+        the same `--workers` parallelism to `run_eval.py` before the scaled ablation run.
       - Cerebras was updated to `gpt-oss-120b` but returns null content intermittently
         (treated as a skip in `llm_client.py`, falls through to Mistral).
       - Gemini `2.5-flash-lite` is the working #1 provider (`2.0-flash` had free-quota 0).

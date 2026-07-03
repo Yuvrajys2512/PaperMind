@@ -20,9 +20,10 @@ async function httpError(res, fallback) {
   return err
 }
 
-export async function uploadPaper(file) {
+export async function uploadPaper(file, paperType) {
   const form = new FormData()
   form.append('file', file)
+  if (paperType) form.append('paper_type', paperType)
   const res = await fetch(`${BASE}/upload`, {
     method: 'POST',
     headers: await authHeaders(),
@@ -48,8 +49,9 @@ export async function queryPaper(paperId, question) {
   return res.json()
 }
 
-export async function listPapers() {
-  const res = await fetch(`${BASE}/papers`, { headers: await authHeaders() })
+export async function listPapers(paperType) {
+  const qs = paperType ? `?paper_type=${paperType}` : ''
+  const res = await fetch(`${BASE}/papers${qs}`, { headers: await authHeaders() })
   if (!res.ok) throw new Error('Failed to fetch papers')
   return res.json()
 }

@@ -148,7 +148,7 @@ function CitationPreview() {
 /* ─────────────────────────────────────────────────────────────────
    UPLOAD PAGE
 ───────────────────────────────────────────────────────────────── */
-export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewrite, onBilling, onAdmin }) {
+export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDrafts, onRewrite, onBilling, onAdmin }) {
   const [dragging, setDragging]             = useState(false)
   const [phase, setPhase]                   = useState('idle') // idle | uploading | processing | error
   const [filename, setFilename]             = useState('')
@@ -239,6 +239,7 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onRewr
         <div className="flex items-center gap-6">
           {onDiscover && <NavLink onClick={onDiscover}>Discover</NavLink>}
           {onLibrary  && <NavLink onClick={onLibrary} badge={paperCount}>Library</NavLink>}
+          {onDrafts   && <NavLink onClick={onDrafts}>Drafts</NavLink>}
           {onRewrite  && <NavLink onClick={onRewrite}>Rewrite</NavLink>}
           {onBilling  && <NavLink onClick={onBilling}>Plan</NavLink>}
           {onAdmin    && <NavLink onClick={onAdmin}>Admin</NavLink>}

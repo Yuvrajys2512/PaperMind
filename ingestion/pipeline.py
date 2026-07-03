@@ -27,7 +27,7 @@ import traceback
 
 from ingestion.query_router      import route_query
 from ingestion.generator         import generate_answer
-from ingestion.evaluator         import evaluate_answer, compute_confidence
+from ingestion.evaluator         import evaluate_answer, compute_confidence, compute_retrieval_quality, compute_numeric_grounding
 from ingestion.retry_engine      import diagnose_failure, retry_query, MAX_ATTEMPTS
 from ingestion.evidence_grader   import grade_answer
 from ingestion.compare_retriever import compare_retrieve
@@ -99,6 +99,8 @@ def answer_query(query: str, paper_name: str, request_id: str = None, on_progres
             "sources":          [],
             "query_used":       query,
             "grading":          {"kept": 0, "removed": 0, "grades": []},
+            "retrieval":        None,
+            "numeric":          None,
             "plan":             {},
             "llm_calls":        get_stats()["call_count"],
             "providers_used":   get_stats()["providers"],
@@ -256,6 +258,12 @@ def answer_query(query: str, paper_name: str, request_id: str = None, on_progres
                         "removed_count":  grading_result["removed_count"],
                         "grading_failed": grading_result["grading_failed"],
                     },
+                    # Retrieval quality — third leg of the RAG triad, scored from
+                    # query↔chunk similarity over the chunks this attempt used.
+                    "retrieval": compute_retrieval_quality(query, chunks),
+                    # Numeric grounding — do the figures in the answer appear in
+                    # the source? None when the answer has no numbers.
+                    "numeric": compute_numeric_grounding(answer, chunks),
                 }
 
             # ── Early exit on pass ────────────────────────────────────────
@@ -291,6 +299,8 @@ def answer_query(query: str, paper_name: str, request_id: str = None, on_progres
             "query_used":       query,
             "plan":             {},
             "grading":          {"grades": [], "removed_count": 0, "grading_failed": True},
+            "retrieval":        None,
+            "numeric":          None,
         }
     elif not best_result["passed"]:
         warning = (
@@ -421,6 +431,8 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str, on_progress=Non
                 "removed_count":  grading_result["removed_count"],
                 "grading_failed": grading_result["grading_failed"],
             },
+            "retrieval":      compute_retrieval_quality(query, chunks),
+            "numeric":        compute_numeric_grounding(answer, chunks),
             "is_comparison":  True,
             "paper_ids":      [paper_id_a, paper_id_b],
             "duration_ms":    round((time.monotonic() - t_start) * 1000),
@@ -451,6 +463,8 @@ def compare_papers(query: str, paper_id_a: str, paper_id_b: str, on_progress=Non
             "query_used":       query,
             "plan":             {},
             "grading":          _empty_grading,
+            "retrieval":        None,
+            "numeric":          None,
             "is_comparison":    True,
             "paper_ids":        [paper_id_a, paper_id_b],
             "duration_ms":      round((time.monotonic() - t_start) * 1000),
