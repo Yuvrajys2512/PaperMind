@@ -36,8 +36,8 @@ export function MetricRing({ label, value, isPercentage = false, accent = 'cyan'
   const circumference = 2 * Math.PI * radius
   const pct = isPercentage ? Math.min(value, 100) : Math.min(value * 100, 100)
   const offset = circumference - (filled ? (pct / 100) * circumference : 0)
-  const strokeColor = accent === 'cyan' ? '#00f5ff' : accent === 'violet' ? '#a78bfa' : '#60a5fa'
-  const glowColor   = accent === 'cyan' ? 'rgba(0,245,255,0.6)' : accent === 'violet' ? 'rgba(167,139,250,0.6)' : 'rgba(96,165,250,0.6)'
+  const strokeColor = accent === 'cyan' ? '#00f5ff' : accent === 'violet' ? '#a78bfa' : accent === 'amber' ? '#fbbf24' : accent === 'emerald' ? '#34d399' : '#60a5fa'
+  const glowColor   = accent === 'cyan' ? 'rgba(0,245,255,0.6)' : accent === 'violet' ? 'rgba(167,139,250,0.6)' : accent === 'amber' ? 'rgba(251,191,36,0.6)' : accent === 'emerald' ? 'rgba(52,211,153,0.6)' : 'rgba(96,165,250,0.6)'
   const displayValue = isPercentage ? value.toFixed(1) + '%' : value.toFixed(2)
   const tip = tooltip || METRIC_TOOLTIPS[String(label).toLowerCase()]
 

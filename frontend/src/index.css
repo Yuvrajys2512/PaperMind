@@ -357,3 +357,41 @@
 .panel-slide-in {
   animation: slide-in-right 0.28s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
+
+/* ── Editorial landing motion (restrained, purposeful) ───────────── */
+/* Staggered reveal for hero lines. Delay is set inline via style. */
+.ed-reveal {
+  opacity: 0;
+  animation: ed-reveal-up 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+@keyframes ed-reveal-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* The "verify" mark draws itself in once, left to right. */
+.ed-underline {
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: ed-underline-draw 0.55s cubic-bezier(0.6, 0, 0.2, 1) 0.55s forwards;
+}
+@keyframes ed-underline-draw { to { transform: scaleX(1); } }
+
+/* A single blinking caret — the only "live" flourish on the hero. */
+.ed-caret {
+  display: inline-block;
+  width: 0.6ch;
+  animation: ed-blink 1.15s steps(1) infinite;
+}
+@keyframes ed-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+/* A slow grounded pulse for the evidence dot in the cited-answer panel. */
+.ed-pulse { animation: ed-pulse 2.4s ease-in-out infinite; }
+@keyframes ed-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ed-reveal    { animation: none; opacity: 1; }
+  .ed-underline { animation: none; transform: scaleX(1); }
+  .ed-caret     { animation: none; }
+  .ed-pulse     { animation: none; }
+}

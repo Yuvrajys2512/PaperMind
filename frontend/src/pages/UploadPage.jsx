@@ -1,43 +1,33 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { uploadPaper, getPaperStatus, listPapers } from '../api'
 import { track } from '../analytics'
+import Wordmark from '../components/Wordmark'
+import NavButton from '../components/NavButton'
+import CitedAnswer from '../components/CitedAnswer'
 
 /* Single restrained accent for the whole page. */
 const ACCENT = '#22d3ee'
 
 /* ─────────────────────────────────────────────────────────────────
-   BACKGROUND — quiet dot grid + one soft top glow. No orbs, no scan.
+   BACKDROP — quiet dot grid, faded at the edges. No orbs, no glass.
+   Editorial: the type carries the page, the background stays out of it.
 ───────────────────────────────────────────────────────────────── */
 function Backdrop() {
   return (
-    <>
-      {/* dot grid */}
-      <div
-        className="fixed inset-0 pointer-events-none"
-        style={{
-          backgroundImage: 'radial-gradient(rgba(255,255,255,0.045) 1px, transparent 1px)',
-          backgroundSize: '24px 24px',
-          maskImage: 'radial-gradient(ellipse 80% 60% at 50% 30%, #000 40%, transparent 100%)',
-          WebkitMaskImage: 'radial-gradient(ellipse 80% 60% at 50% 30%, #000 40%, transparent 100%)',
-          zIndex: 0,
-        }}
-      />
-      {/* one soft accent glow, top-center — subtle, not a floating orb */}
-      <div
-        className="fixed pointer-events-none"
-        style={{
-          top: '-220px', left: '50%', transform: 'translateX(-50%)',
-          width: 900, height: 500,
-          background: `radial-gradient(ellipse at center, ${ACCENT}14 0%, transparent 65%)`,
-          filter: 'blur(40px)',
-          zIndex: 0,
-        }}
-      />
-    </>
+    <div
+      className="fixed inset-0 pointer-events-none"
+      style={{
+        backgroundImage: 'radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px)',
+        backgroundSize: '26px 26px',
+        maskImage: 'radial-gradient(ellipse 90% 70% at 50% 25%, #000 35%, transparent 100%)',
+        WebkitMaskImage: 'radial-gradient(ellipse 90% 70% at 50% 25%, #000 35%, transparent 100%)',
+        zIndex: 0,
+      }}
+    />
   )
 }
 
-/* Derive landing-page stats from saved chat history (read once, at mount). */
+/* Derive home-page stats from saved chat history (read once, at mount). */
 function computeSessionStats() {
   try {
     const saved = localStorage.getItem('papermind_chats')
@@ -61,92 +51,47 @@ function computeSessionStats() {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   TOP NAV — replaces the floating pill buttons at the bottom.
+   CAPABILITY ROW — an editorial, clickable entry point. Replaces the
+   "nothing shows your power" emptiness: each of the real surfaces
+   (Discover, Drafts/write-mode, Rewrite, Library) is a real link, laid
+   out as a typographic row with a mono index and a hairline divider —
+   not a glossy feature card.
 ───────────────────────────────────────────────────────────────── */
-function NavLink({ children, onClick, badge }) {
+function CapabilityRow({ index, label, desc, onClick, badge, last }) {
   return (
     <button
       onClick={onClick}
-      className="group relative flex items-center gap-1.5 text-sm text-gray-400 hover:text-white transition-colors duration-200"
+      className="group w-full flex items-center gap-5 py-5 text-left transition-colors"
+      style={{ borderBottom: last ? 'none' : '1px solid rgba(255,255,255,0.07)' }}
     >
-      {children}
-      {badge != null && badge > 0 && (
-        <span
-          className="text-[10px] font-semibold px-1.5 py-px rounded-full"
-          style={{ background: `${ACCENT}22`, color: ACCENT, fontFamily: 'var(--font-mono)' }}
-        >
-          {badge}
-        </span>
-      )}
-      <span
-        className="absolute -bottom-1 left-0 h-px w-0 group-hover:w-full transition-all duration-300"
-        style={{ background: ACCENT }}
-      />
+      <span className="text-[11px] text-gray-600 w-6 flex-shrink-0" style={{ fontFamily: 'var(--font-mono)' }}>
+        {index}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-[15px] font-semibold text-gray-200 group-hover:text-white transition-colors" style={{ fontFamily: 'var(--font-display)' }}>
+            {label}
+          </span>
+          {badge != null && badge > 0 && (
+            <span className="text-[10px] font-semibold px-1.5 py-px rounded-full" style={{ background: `${ACCENT}22`, color: ACCENT, fontFamily: 'var(--font-mono)' }}>
+              {badge}
+            </span>
+          )}
+        </div>
+        <p className="text-[13px] text-gray-500 mt-0.5 leading-relaxed">{desc}</p>
+      </div>
+      <svg
+        className="w-4 h-4 text-gray-700 group-hover:text-gray-300 group-hover:translate-x-0.5 transition-all flex-shrink-0"
+        fill="none" stroke="currentColor" viewBox="0 0 24 24"
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+      </svg>
     </button>
   )
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   PRODUCT PROOF — a static, real-looking cited answer. The actual
-   reason to trust the product, instead of three floating stat cards.
-───────────────────────────────────────────────────────────────── */
-function CitationPreview() {
-  return (
-    <div
-      className="rounded-2xl p-5 w-full"
-      style={{
-        background: 'linear-gradient(160deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012))',
-        border: '1px solid rgba(255,255,255,0.07)',
-        backdropFilter: 'blur(20px)',
-      }}
-    >
-      {/* fake window chrome — signals "this is the product" */}
-      <div className="flex items-center gap-1.5 mb-4">
-        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }} />
-        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }} />
-        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }} />
-        <span className="ml-2 text-[10px] text-gray-600 truncate" style={{ fontFamily: 'var(--font-mono)' }}>
-          attention-is-all-you-need.pdf
-        </span>
-      </div>
-
-      {/* question */}
-      <div className="flex justify-end mb-3">
-        <div className="text-sm text-gray-200 px-3.5 py-2 rounded-2xl rounded-br-md max-w-[80%]"
-          style={{ background: 'rgba(255,255,255,0.06)' }}>
-          What was the main result?
-        </div>
-      </div>
-
-      {/* answer */}
-      <div className="text-sm text-gray-300 leading-relaxed mb-3">
-        The Transformer reached <span className="text-white font-medium">28.4 BLEU</span> on
-        WMT14 EN→DE, improving over the best prior result by more than 2 BLEU
-        <button
-          className="align-super text-[10px] font-semibold px-1.5 py-0.5 rounded-md mx-0.5 transition-colors"
-          style={{ background: `${ACCENT}1a`, color: ACCENT, fontFamily: 'var(--font-mono)' }}
-        >
-          §6.2
-        </button>
-        while training in a fraction of the time.
-      </div>
-
-      {/* evidence footer */}
-      <div className="flex items-center gap-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-        <span className="flex items-center gap-1.5 text-[11px] text-gray-500" style={{ fontFamily: 'var(--font-mono)' }}>
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: ACCENT, boxShadow: `0 0 6px ${ACCENT}` }} />
-          grounded in source
-        </span>
-        <span className="text-[11px] text-gray-600" style={{ fontFamily: 'var(--font-mono)' }}>
-          confidence 94%
-        </span>
-      </div>
-    </div>
-  )
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   UPLOAD PAGE
+   HOME (post-sign-in)
 ───────────────────────────────────────────────────────────────── */
 export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDrafts, onRewrite, onBilling, onAdmin }) {
   const [dragging, setDragging]             = useState(false)
@@ -213,95 +158,91 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
 
   const onDragOver  = (e) => { e.preventDefault(); setDragging(true) }
   const onDragLeave = () => setDragging(false)
+  const openPicker  = () => inputRef.current && inputRef.current.click()
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#0a0b0e', position: 'relative' }}>
       <Backdrop />
 
-      {/* ── TOP NAV ── */}
-      <nav className="relative z-10 flex items-center justify-between px-6 md:px-10 py-5">
-        <div className="flex items-center gap-2.5">
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center"
-            style={{ background: `${ACCENT}1a`, border: `1px solid ${ACCENT}33` }}
-          >
-            <svg className="w-4 h-4" fill="none" stroke={ACCENT} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-                d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-          </div>
-          <span className="text-[15px] font-semibold text-white tracking-tight"
-            style={{ fontFamily: 'var(--font-display)' }}>
-            PaperMind
-          </span>
-        </div>
-
-        <div className="flex items-center gap-6">
-          {onDiscover && <NavLink onClick={onDiscover}>Discover</NavLink>}
-          {onLibrary  && <NavLink onClick={onLibrary} badge={paperCount}>Library</NavLink>}
-          {onDrafts   && <NavLink onClick={onDrafts}>Drafts</NavLink>}
-          {onRewrite  && <NavLink onClick={onRewrite}>Rewrite</NavLink>}
-          {onBilling  && <NavLink onClick={onBilling}>Plan</NavLink>}
-          {onAdmin    && <NavLink onClick={onAdmin}>Admin</NavLink>}
+      {/* ── TOP NAV — sticky, solid, unmistakably visible ── */}
+      <nav
+        className="sticky top-0 z-20 flex items-center justify-between px-6 md:px-10 py-4"
+        style={{ background: 'rgba(10,11,14,0.85)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}
+      >
+        <Wordmark accent={ACCENT} />
+        <div className="flex items-center gap-2">
+          {onDiscover && <NavButton onClick={onDiscover}>Discover</NavButton>}
+          {onLibrary  && <NavButton onClick={onLibrary} badge={paperCount}>Library</NavButton>}
+          {onDrafts   && <NavButton onClick={onDrafts}>Drafts</NavButton>}
+          {onRewrite  && <NavButton onClick={onRewrite}>Rewrite</NavButton>}
+          {onBilling  && <NavButton onClick={onBilling}>Plan</NavButton>}
+          {onAdmin    && <NavButton onClick={onAdmin}>Admin</NavButton>}
+          <div className="w-px h-5 mx-1" style={{ background: 'rgba(255,255,255,0.1)' }} />
+          <NavButton primary onClick={openPicker}>New paper</NavButton>
         </div>
       </nav>
 
       {/* ── HERO ── */}
-      <div className="relative z-10 flex-1 flex items-center px-6 md:px-10 pb-16">
-        <div className="w-full max-w-6xl mx-auto grid md:grid-cols-2 gap-10 lg:gap-16 items-center">
+      <section className="relative z-10 px-6 md:px-10 pt-16 md:pt-24 pb-20">
+        <div className="w-full max-w-6xl mx-auto grid md:grid-cols-2 gap-12 lg:gap-16 items-center">
 
           {/* LEFT — copy + dropzone */}
           <div>
-            {/* eyebrow */}
-            <div className="inline-flex items-center gap-2 mb-6 px-3 py-1 rounded-full"
-              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+            <div
+              className="ed-reveal inline-flex items-center gap-2 mb-7 px-3 py-1 rounded-full"
+              style={{ animationDelay: '0ms', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
+            >
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: ACCENT, boxShadow: `0 0 6px ${ACCENT}` }} />
               <span className="text-[11px] text-gray-400 tracking-wide" style={{ fontFamily: 'var(--font-mono)' }}>
-                evidence-graded answers
+                evidence-graded · benchmarked on QASPER
               </span>
             </div>
 
             <h1
-              className="text-4xl md:text-5xl font-semibold mb-5 tracking-tight leading-[1.08] text-white"
-              style={{ fontFamily: 'var(--font-display)' }}
+              className="ed-reveal text-5xl md:text-6xl font-semibold mb-6 tracking-[-0.02em] leading-[1.03] text-white"
+              style={{ animationDelay: '80ms', fontFamily: 'var(--font-display)' }}
             >
-              Ask questions.<br />
-              Get answers you can&nbsp;
+              Ask any paper.<br />
+              Get answers you can{' '}
               <span style={{ position: 'relative', whiteSpace: 'nowrap' }}>
                 verify
-                <span style={{
-                  position: 'absolute', left: 0, right: 0, bottom: 2, height: 8,
-                  background: `${ACCENT}55`, borderRadius: 2, zIndex: -1,
-                }} />
-              </span>.
+                <span
+                  className="ed-underline"
+                  style={{ position: 'absolute', left: 0, right: 0, bottom: 4, height: 10, background: `${ACCENT}55`, borderRadius: 2, zIndex: -1 }}
+                />
+              </span>
+              <span className="ed-caret" style={{ color: ACCENT }}>.</span>
             </h1>
 
-            <p className="text-gray-400 text-[15px] max-w-md leading-relaxed mb-8">
-              Drop any research PDF and ask anything. Every claim links to the
-              exact section it came from — no invented citations.
+            <p
+              className="ed-reveal text-gray-400 text-[15px] max-w-md leading-relaxed mb-8"
+              style={{ animationDelay: '160ms' }}
+            >
+              Drop a research PDF and ask anything. Every claim links to the exact
+              line it came from — no invented citations.
             </p>
 
             {/* ── DROPZONE ── */}
             {(phase === 'idle' || phase === 'error') && (
-              <>
+              <div className="ed-reveal" style={{ animationDelay: '240ms' }}>
                 <div
-                  onClick={() => inputRef.current.click()}
+                  onClick={openPicker}
                   onDrop={onDrop}
                   onDragOver={onDragOver}
                   onDragLeave={onDragLeave}
                   className="group relative overflow-hidden rounded-2xl cursor-pointer transition-all duration-300"
                   style={{
                     background: dragging ? `${ACCENT}0d` : 'rgba(255,255,255,0.02)',
-                    border: `1px ${dragging ? 'solid' : 'dashed'} ${dragging ? `${ACCENT}88` : 'rgba(255,255,255,0.14)'}`,
+                    border: `1px ${dragging ? 'solid' : 'dashed'} ${dragging ? `${ACCENT}88` : 'rgba(255,255,255,0.16)'}`,
                     boxShadow: dragging ? `0 0 0 4px ${ACCENT}1a` : 'none',
                   }}
                 >
-                  <div className="px-6 py-8 flex items-center gap-5">
+                  <div className="px-6 py-7 flex items-center gap-5">
                     <div
                       className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors duration-300"
                       style={{
                         background: dragging ? `${ACCENT}22` : 'rgba(255,255,255,0.05)',
-                        border: `1px solid ${dragging ? `${ACCENT}55` : 'rgba(255,255,255,0.08)'}`,
+                        border: `1px solid ${dragging ? `${ACCENT}55` : 'rgba(255,255,255,0.09)'}`,
                       }}
                     >
                       <svg className="w-6 h-6 transition-colors duration-300"
@@ -357,7 +298,7 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
                   </div>
                 )}
 
-                {/* ── session stats — quiet inline row, not big cards ── */}
+                {/* ── session stats — quiet inline row ── */}
                 {stats && (
                   <div className="mt-6 flex items-center gap-5 flex-wrap">
                     {stats.map((s, i) => (
@@ -371,7 +312,7 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
                     ))}
                   </div>
                 )}
-              </>
+              </div>
             )}
 
             {/* ── UPLOADING / PROCESSING ── */}
@@ -381,7 +322,6 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
                 style={{ background: 'rgba(255,255,255,0.025)', border: `1px solid ${ACCENT}22` }}
               >
                 <div className="flex items-center gap-4 mb-5">
-                  {/* single refined ring */}
                   <div className="relative w-10 h-10 flex-shrink-0">
                     <div className="absolute inset-0 rounded-full border-2"
                       style={{ borderColor: 'rgba(255,255,255,0.08)' }} />
@@ -400,7 +340,6 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
                   </div>
                 </div>
 
-                {/* stages */}
                 {phase === 'processing' && (
                   <div className="flex items-center gap-2 mb-5">
                     {['Parse', 'Chunk', 'Embed', 'Index'].map((s, i) => (
@@ -413,7 +352,6 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
                   </div>
                 )}
 
-                {/* progress bar */}
                 <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
                   <div
                     className={`h-full rounded-full transition-all duration-500 ${phase === 'processing' ? 'animate-pulse' : ''}`}
@@ -428,30 +366,59 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
           </div>
 
           {/* RIGHT — product proof */}
-          <div className="hidden md:block">
-            <CitationPreview />
+          <div className="hidden md:block ed-reveal" style={{ animationDelay: '200ms' }}>
+            <CitedAnswer />
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* ── CAPABILITIES — the real surfaces, as editorial entry points ── */}
+      <section className="relative z-10 px-6 md:px-10 pb-24">
+        <div className="w-full max-w-4xl mx-auto">
+          <div className="flex items-baseline justify-between mb-2">
+            <h2 className="text-[13px] uppercase tracking-[0.18em] text-gray-500" style={{ fontFamily: 'var(--font-mono)' }}>
+              Everything you can do
+            </h2>
+            <span className="text-[11px] text-gray-700" style={{ fontFamily: 'var(--font-mono)' }}>PaperMind</span>
+          </div>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.09)' }}>
+            {(() => {
+              const rows = [
+                onDiscover && { label: 'Discover', desc: 'Search across the literature and import papers by topic.', onClick: onDiscover },
+                onLibrary  && { label: 'Library',  desc: 'Everything you\'ve processed, ready to reopen and query.', onClick: onLibrary, badge: paperCount },
+                onDrafts   && { label: 'Write mode', desc: 'Pre-submission audits on your own draft — claim grounding, numbers, venue fit, and novelty.', onClick: onDrafts },
+                onRewrite  && { label: 'Rewrite',  desc: 'Tighten a passage without losing its meaning or citations.', onClick: onRewrite },
+              ].filter(Boolean)
+              return rows.map((r, i) => (
+                <CapabilityRow
+                  key={r.label}
+                  index={String(i + 1).padStart(2, '0')}
+                  label={r.label}
+                  desc={r.desc}
+                  onClick={r.onClick}
+                  badge={r.badge}
+                  last={i === rows.length - 1}
+                />
+              ))
+            })()}
+          </div>
+        </div>
+      </section>
 
       {/* ── FOOTER ── */}
-      <div className="relative z-10 px-6 md:px-10 py-5 flex items-center justify-between"
-        style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+      <div className="relative z-10 mt-auto px-6 md:px-10 py-5 flex items-center justify-between"
+        style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <span className="text-[11px] text-gray-700" style={{ fontFamily: 'var(--font-mono)' }}>
           PaperMind
         </span>
         <div className="flex items-center gap-4">
-          <a href="#/terms" className="text-[11px] text-gray-700 hover:text-gray-500 transition-colors">Terms</a>
-          <a href="#/privacy" className="text-[11px] text-gray-700 hover:text-gray-500 transition-colors">Privacy</a>
+          <a href="#/terms" className="text-[11px] text-gray-600 hover:text-gray-400 transition-colors">Terms</a>
+          <a href="#/privacy" className="text-[11px] text-gray-600 hover:text-gray-400 transition-colors">Privacy</a>
           <span className="text-[11px] text-gray-700 hidden sm:inline">
             Cites the exact section · evidence-graded
           </span>
         </div>
       </div>
-
-      <style>{`
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      `}</style>
     </div>
   )
 }

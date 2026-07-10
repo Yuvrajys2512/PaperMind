@@ -128,6 +128,7 @@ def normalize_answer(answer_entry: dict) -> dict:
             "text": "Unanswerable", "evidence": evidence}
 
 
+
 def iter_questions(paper: dict):
     """Yield ``(question_text, question_id, [normalized answers])`` per question."""
     for qa in paper.get("qas", []):

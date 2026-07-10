@@ -286,3 +286,119 @@ def get_review_report(paper_id: str) -> dict | None:
 def delete_review_report(paper_id: str):
     """Best-effort delete of a paper's cached reviewer-audit report."""
     _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_review_key(paper_id))
+
+
+# ── Novelty / related-work reports (Cloudflare R2) ────────────────────────────
+# Write-mode novelty scan (novelty_scout) — same caching rationale as the audits
+# above: an opaque JSON document keyed only by paper_id, stored next to the PDF
+# so re-opening a draft's novelty scan is free unless it's force-recomputed.
+
+def _novelty_key(paper_id: str) -> str:
+    return f"{paper_id}.novelty.json"
+
+
+def upload_novelty_report(paper_id: str, report: dict):
+    """Persist a novelty-scan report as a JSON blob in R2."""
+    _s3.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=_novelty_key(paper_id),
+        Body=json.dumps(report).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def get_novelty_report(paper_id: str) -> dict | None:
+    """Return the cached novelty-scan report for a paper, or None if none exists."""
+    try:
+        obj = _s3.get_object(Bucket=R2_BUCKET_NAME, Key=_novelty_key(paper_id))
+    except _s3.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        # Treat any read failure as a cache miss — the caller will recompute.
+        return None
+    try:
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_novelty_report(paper_id: str):
+    """Best-effort delete of a paper's cached novelty-scan report."""
+    _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_novelty_key(paper_id))
+
+
+# ── Venue-fit / structure reports (Cloudflare R2) ─────────────────────────────
+# Write-mode structure check (structure_auditor). One blob per paper; the target
+# venue is stored inside it, so the endpoint serves the cache only when the
+# requested venue matches and otherwise recomputes — keeps deletion to one key.
+
+def _structure_key(paper_id: str) -> str:
+    return f"{paper_id}.structure.json"
+
+
+def upload_structure_report(paper_id: str, report: dict):
+    """Persist a venue-fit / structure report as a JSON blob in R2."""
+    _s3.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=_structure_key(paper_id),
+        Body=json.dumps(report).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def get_structure_report(paper_id: str) -> dict | None:
+    """Return the cached structure report for a paper, or None if none exists."""
+    try:
+        obj = _s3.get_object(Bucket=R2_BUCKET_NAME, Key=_structure_key(paper_id))
+    except _s3.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        # Treat any read failure as a cache miss — the caller will recompute.
+        return None
+    try:
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_structure_report(paper_id: str):
+    """Best-effort delete of a paper's cached structure report."""
+    _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_structure_key(paper_id))
+
+
+# ── Numbers-consistency reports (Cloudflare R2) ───────────────────────────────
+# Write-mode numbers check (numbers_auditor) — same caching rationale as the
+# claim/reviewer audits: an opaque JSON document keyed only by paper_id.
+
+def _numbers_key(paper_id: str) -> str:
+    return f"{paper_id}.numbers.json"
+
+
+def upload_numbers_report(paper_id: str, report: dict):
+    """Persist a numbers-consistency report as a JSON blob in R2."""
+    _s3.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=_numbers_key(paper_id),
+        Body=json.dumps(report).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def get_numbers_report(paper_id: str) -> dict | None:
+    """Return the cached numbers report for a paper, or None if none exists."""
+    try:
+        obj = _s3.get_object(Bucket=R2_BUCKET_NAME, Key=_numbers_key(paper_id))
+    except _s3.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        # Treat any read failure as a cache miss — the caller will recompute.
+        return None
+    try:
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_numbers_report(paper_id: str):
+    """Best-effort delete of a paper's cached numbers report."""
+    _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_numbers_key(paper_id))

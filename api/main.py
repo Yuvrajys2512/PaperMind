@@ -16,6 +16,9 @@ import threading
 from ingestion.pipeline import answer_query, compare_papers
 from ingestion.claim_auditor import audit_paper
 from ingestion.reviewer_auditor import review_paper
+from ingestion.novelty_scout import find_related_work
+from ingestion.structure_auditor import check_structure, list_venues
+from ingestion.numbers_auditor import audit_numbers
 from ingestion.rewriter import rewrite_text
 from ingestion.llm_client import get_stats, reset_stats
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Depends, Request
@@ -47,6 +50,15 @@ from api.storage import (
     upload_review_report,
     get_review_report,
     delete_review_report,
+    upload_novelty_report,
+    get_novelty_report,
+    delete_novelty_report,
+    upload_structure_report,
+    get_structure_report,
+    delete_structure_report,
+    upload_numbers_report,
+    get_numbers_report,
+    delete_numbers_report,
 )
 from api.usage import (
     enforce_paper_quota,
@@ -347,6 +359,9 @@ def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_cur
         for _drop, _op in (
             (delete_audit_report, "delete_audit_report"),
             (delete_review_report, "delete_review_report"),
+            (delete_novelty_report, "delete_novelty_report"),
+            (delete_structure_report, "delete_structure_report"),
+            (delete_numbers_report, "delete_numbers_report"),
         ):
             try:
                 _drop(paper_id)
@@ -1253,6 +1268,433 @@ async def review_paper_stream(
                         "dimensions_checked": report.get("dimensions_checked", 0),
                         "weak": report.get("weak", 0),
                         "missing": report.get("missing", 0),
+                    },
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                )
+                report["request_id"] = req_id
+                report["cached"] = False
+                yield _sse_format("done", report)
+                return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Novelty / related-work scan — write-mode literature search (SSE)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Unlike the two audits above (which reason over the paper's OWN Chroma
+# collection), this one searches *across the literature* via Semantic Scholar to
+# surface the prior work closest to a draft. Same architecture regardless:
+# progress pusher + SSE, R2-cached, re-served without LLM/network cost unless
+# ?force=1 is passed. Shares the audit quota pool (kind="audit").
+
+@app.post("/papers/{paper_id}/novelty/stream")
+async def novelty_scan_stream(
+    paper_id: str,
+    request: Request,
+    force: bool = False,
+    user_id: str = Depends(enforce_audit_quota),
+):
+    req_id = generate_request_id()
+    loop   = asyncio.get_running_loop()
+    t0     = time.monotonic()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    paper = get_readable_paper(paper_id, user_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paper is not ready yet. Current status: {paper['status']}",
+        )
+
+    # Serve the cached report instantly when present (no LLM, no usage recorded).
+    if not force:
+        cached = get_novelty_report(paper_id)
+        if cached:
+            async def cached_stream():
+                yield _sse_format("open", {"req_id": req_id})
+                cached["cached"] = True
+                yield _sse_format("done", cached)
+            return StreamingResponse(
+                cached_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    on_progress = _make_progress_pusher(queue, loop)
+
+    async def run_scan():
+        try:
+            def fn():
+                # reset_stats/get_stats are thread-local — run them in the same
+                # executor thread as the LLM work so the usage numbers are this
+                # scan's only. Lock the paper like a query so a concurrent
+                # delete/query can't pull Chroma state out from under us.
+                with paper_locked(paper_id):
+                    reset_stats()
+                    report = find_related_work(paper_id, on_progress=on_progress)
+                    return report, get_stats()
+
+            report, stats = await asyncio.wait_for(
+                loop.run_in_executor(None, fn),
+                timeout=180.0,
+            )
+            await queue.put(("done", (report, stats)))
+        except asyncio.TimeoutError:
+            log_operation(
+                "novelty_scan", "error", req_id=req_id, user_id=user_id,
+                error="timeout", context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {
+                "message": "Novelty scan timed out — the literature search may be slow right now. Please try again.",
+            }))
+        except Exception as exc:
+            log_operation(
+                "novelty_scan", "error", req_id=req_id, user_id=user_id,
+                error=exc, context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {"message": f"Novelty scan failed: {exc}"}))
+
+    asyncio.create_task(run_scan())
+
+    async def event_stream():
+        yield _sse_format("open", {"req_id": req_id})
+
+        while True:
+            kind, payload = await queue.get()
+
+            if kind == "progress":
+                yield _sse_format("progress", payload)
+                continue
+
+            if kind == "error":
+                yield _sse_format("error", payload)
+                return
+
+            if kind == "done":
+                report, stats = payload
+                # Only record usage + cache when the scan actually produced a
+                # report (a hard failure shouldn't be cached or billed).
+                if not report.get("scan_failed"):
+                    try:
+                        upload_novelty_report(paper_id, report)
+                    except Exception as exc:
+                        log_operation(
+                            "upload_novelty_report", "error", req_id=req_id,
+                            user_id=user_id, error=exc, context={"paper_id": paper_id},
+                        )
+                    record_usage(
+                        user_id=user_id,
+                        kind="audit",
+                        req_id=req_id,
+                        paper_id=paper_id,
+                        llm_calls=stats["call_count"],
+                        tokens_in=stats["tokens_in"],
+                        tokens_out=stats["tokens_out"],
+                        cost_usd=stats["cost_usd"],
+                    )
+                log_operation(
+                    "novelty_scan", "success", req_id=req_id, user_id=user_id,
+                    context={
+                        "paper_id": paper_id,
+                        "candidates_found": report.get("candidates_found", 0),
+                    },
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                )
+                report["request_id"] = req_id
+                report["cached"] = False
+                yield _sse_format("done", report)
+                return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Venue-fit / structure check — write-mode section-completeness check (SSE)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Sibling of the reviewer audit, but a presence/completeness check against a
+# target venue's expected structure (Limitations, Ethics, Broader Impacts,
+# Reproducibility, …) rather than a methodological-quality judgement. The report
+# is venue-dependent, so the cache is keyed by paper but stores the venue inside
+# it — a cached report is served only when its venue matches the request.
+
+@app.get("/venues")
+def get_venues():
+    """Static list of target venues + labels for the structure-check selector."""
+    return {"venues": list_venues()}
+
+
+@app.post("/papers/{paper_id}/structure/stream")
+async def structure_check_stream(
+    paper_id: str,
+    request: Request,
+    venue: str = "generic",
+    force: bool = False,
+    user_id: str = Depends(enforce_audit_quota),
+):
+    req_id = generate_request_id()
+    loop   = asyncio.get_running_loop()
+    t0     = time.monotonic()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    paper = get_readable_paper(paper_id, user_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paper is not ready yet. Current status: {paper['status']}",
+        )
+
+    # Serve the cached report instantly — but only when it was computed for the
+    # SAME target venue (a different venue means a different rubric → recompute).
+    if not force:
+        cached = get_structure_report(paper_id)
+        if cached and cached.get("venue") == venue:
+            async def cached_stream():
+                yield _sse_format("open", {"req_id": req_id})
+                cached["cached"] = True
+                yield _sse_format("done", cached)
+            return StreamingResponse(
+                cached_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    on_progress = _make_progress_pusher(queue, loop)
+
+    async def run_check():
+        try:
+            def fn():
+                # reset_stats/get_stats are thread-local — run them in the same
+                # executor thread as the LLM work so the usage numbers are this
+                # check's only. Lock the paper like a query so a concurrent
+                # delete/query can't pull Chroma state out from under us.
+                with paper_locked(paper_id):
+                    reset_stats()
+                    report = check_structure(paper_id, venue, on_progress=on_progress)
+                    return report, get_stats()
+
+            report, stats = await asyncio.wait_for(
+                loop.run_in_executor(None, fn),
+                timeout=180.0,
+            )
+            await queue.put(("done", (report, stats)))
+        except asyncio.TimeoutError:
+            log_operation(
+                "structure_check", "error", req_id=req_id, user_id=user_id,
+                error="timeout", context={"paper_id": paper_id, "venue": venue},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {
+                "message": "Structure check timed out. The draft may be unusually large — please try again.",
+            }))
+        except Exception as exc:
+            log_operation(
+                "structure_check", "error", req_id=req_id, user_id=user_id,
+                error=exc, context={"paper_id": paper_id, "venue": venue},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {"message": f"Structure check failed: {exc}"}))
+
+    asyncio.create_task(run_check())
+
+    async def event_stream():
+        yield _sse_format("open", {"req_id": req_id})
+
+        while True:
+            kind, payload = await queue.get()
+
+            if kind == "progress":
+                yield _sse_format("progress", payload)
+                continue
+
+            if kind == "error":
+                yield _sse_format("error", payload)
+                return
+
+            if kind == "done":
+                report, stats = payload
+                # Only record usage + cache when the check actually produced a
+                # report (a hard failure shouldn't be cached or billed).
+                if not report.get("structure_failed"):
+                    try:
+                        upload_structure_report(paper_id, report)
+                    except Exception as exc:
+                        log_operation(
+                            "upload_structure_report", "error", req_id=req_id,
+                            user_id=user_id, error=exc, context={"paper_id": paper_id},
+                        )
+                    record_usage(
+                        user_id=user_id,
+                        kind="audit",
+                        req_id=req_id,
+                        paper_id=paper_id,
+                        llm_calls=stats["call_count"],
+                        tokens_in=stats["tokens_in"],
+                        tokens_out=stats["tokens_out"],
+                        cost_usd=stats["cost_usd"],
+                    )
+                log_operation(
+                    "structure_check", "success", req_id=req_id, user_id=user_id,
+                    context={
+                        "paper_id": paper_id,
+                        "venue": venue,
+                        "required_missing": report.get("required_missing", 0),
+                        "missing": report.get("missing", 0),
+                    },
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                )
+                report["request_id"] = req_id
+                report["cached"] = False
+                yield _sse_format("done", report)
+                return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Numbers-consistency check — write-mode abstract↔results reconciliation (SSE)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Cousin of the claim audit: instead of "are the qualitative claims grounded?",
+# this asks "do the exact figures in the abstract/intro match the results tables?"
+# — catching stale/copy-paste/transcription number errors. Same architecture:
+# progress pusher + SSE, R2-cached, re-served without LLM cost unless ?force=1.
+
+@app.post("/papers/{paper_id}/numbers/stream")
+async def numbers_check_stream(
+    paper_id: str,
+    request: Request,
+    force: bool = False,
+    user_id: str = Depends(enforce_audit_quota),
+):
+    req_id = generate_request_id()
+    loop   = asyncio.get_running_loop()
+    t0     = time.monotonic()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    paper = get_readable_paper(paper_id, user_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paper is not ready yet. Current status: {paper['status']}",
+        )
+
+    # Serve the cached report instantly when present (no LLM, no usage recorded).
+    if not force:
+        cached = get_numbers_report(paper_id)
+        if cached:
+            async def cached_stream():
+                yield _sse_format("open", {"req_id": req_id})
+                cached["cached"] = True
+                yield _sse_format("done", cached)
+            return StreamingResponse(
+                cached_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    on_progress = _make_progress_pusher(queue, loop)
+
+    async def run_numbers():
+        try:
+            def fn():
+                # reset_stats/get_stats are thread-local — run them in the same
+                # executor thread as the LLM work so the usage numbers are this
+                # check's only. Lock the paper like a query so a concurrent
+                # delete/query can't pull Chroma state out from under us.
+                with paper_locked(paper_id):
+                    reset_stats()
+                    report = audit_numbers(paper_id, on_progress=on_progress)
+                    return report, get_stats()
+
+            report, stats = await asyncio.wait_for(
+                loop.run_in_executor(None, fn),
+                timeout=180.0,
+            )
+            await queue.put(("done", (report, stats)))
+        except asyncio.TimeoutError:
+            log_operation(
+                "numbers_check", "error", req_id=req_id, user_id=user_id,
+                error="timeout", context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {
+                "message": "Numbers check timed out. The paper may be unusually large — please try again.",
+            }))
+        except Exception as exc:
+            log_operation(
+                "numbers_check", "error", req_id=req_id, user_id=user_id,
+                error=exc, context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {"message": f"Numbers check failed: {exc}"}))
+
+    asyncio.create_task(run_numbers())
+
+    async def event_stream():
+        yield _sse_format("open", {"req_id": req_id})
+
+        while True:
+            kind, payload = await queue.get()
+
+            if kind == "progress":
+                yield _sse_format("progress", payload)
+                continue
+
+            if kind == "error":
+                yield _sse_format("error", payload)
+                return
+
+            if kind == "done":
+                report, stats = payload
+                # Only record usage + cache when the check actually produced a
+                # report (a hard failure shouldn't be cached or billed).
+                if not report.get("audit_failed"):
+                    try:
+                        upload_numbers_report(paper_id, report)
+                    except Exception as exc:
+                        log_operation(
+                            "upload_numbers_report", "error", req_id=req_id,
+                            user_id=user_id, error=exc, context={"paper_id": paper_id},
+                        )
+                    record_usage(
+                        user_id=user_id,
+                        kind="audit",
+                        req_id=req_id,
+                        paper_id=paper_id,
+                        llm_calls=stats["call_count"],
+                        tokens_in=stats["tokens_in"],
+                        tokens_out=stats["tokens_out"],
+                        cost_usd=stats["cost_usd"],
+                    )
+                log_operation(
+                    "numbers_check", "success", req_id=req_id, user_id=user_id,
+                    context={
+                        "paper_id": paper_id,
+                        "numbers_checked": report.get("numbers_checked", 0),
+                        "mismatched": report.get("mismatched", 0),
                     },
                     duration_ms=round((time.monotonic() - t0) * 1000),
                 )

@@ -62,16 +62,43 @@ Repurposed the two audit engines PaperMind already had (`ingestion/reviewer_audi
 
 ---
 
-## 3. What's queued next (not started)
+## 3. What's queued next
 
 Ranked by leverage vs. effort, as discussed with the user:
 
-1. **Novelty / related-work search** — embed the draft's abstract, search Semantic Scholar (free Graph API, has SPECTER2 embeddings built for exactly this) or arXiv/OpenAlex for close prior work, surface nearest neighbors. This is genuinely new work: a new external API integration, not a repurposing of existing code, because it searches *across* the literature rather than reasoning over one uploaded PDF like everything else in this app does.
-2. **Citation gap check** — flag claims in the draft with no nearby citation. Smaller, but most useful paired with #1 (needs a corpus to cross-reference against).
-3. **Venue-fit / structure check** — flags missing sections a target venue expects (limitations, reproducibility, ethics statement). Cheap: mostly reuses the `reviewer_auditor.py` scaffolding/pattern.
-4. **Abstract/intro/results consistency check** — does the abstract's claims match what the results section shows. A variant of `claim_auditor.py`'s approach.
+1. **Novelty / related-work search** — ✅ **code-complete 2026-07-10** (see §5). Searches *across* the literature via Semantic Scholar for the prior work closest to a draft.
+2. **Citation gap check** — flag claims in the draft with no nearby citation. Smaller, but most useful paired with #1 (needs a corpus to cross-reference against). *Its useful form needs Semantic Scholar too — so it's a poor "while waiting for the key" pick; the S2 client + LLM rating scaffolding from #1 is reusable when it's built.*
+3. **Venue-fit / structure check** — ✅ **code-complete 2026-07-10** (see §6).
+4. **Abstract/intro/results consistency check** — ✅ **shipped as the "Numbers Check" (reshaped)**, code-complete 2026-07-10 (see §7). Reshaped away from the Claim-Audit overlap into a sharp numbers-only reconciliation (abstract figures vs results tables).
 
-None of these have been scoped into a plan yet — treat this list as a starting menu for the next planning conversation, not a committed roadmap.
+Only #2 (citation-gap) remains, and it's key-blocked like novelty — treat as a starting menu, not a committed roadmap.
+
+---
+
+## 5. Feature #1 — Novelty / related-work scan (code-complete 2026-07-10)
+
+A third tab ("Novelty Scan") in the draft reviewer. Unlike the two audits (which reason over the draft's *own* Chroma collection), this searches *across the literature* via Semantic Scholar to surface the prior work closest to the draft, rates each neighbour for closeness, and synthesizes a positioning read. This was the one genuinely-new piece (a cross-literature external integration), but it reused far more than expected — the app already had a Semantic Scholar client (`discovery/sources/semantic_scholar.py`) and the whole audit/SSE/cache/quota rig.
+
+### Backend
+- **`ingestion/novelty_scout.py`** (new) — `find_related_work(paper_id, on_progress) -> dict`, same never-raises contract as `audit_paper`/`review_paper`. Pipeline: pull abstract/intro from Chroma → 1 LLM call distils 2–3 search queries → **synchronous** S2 search (a sync sibling of the async discovery client, so it drops into `run_in_executor` with no event-loop-in-thread hazard) → merge/dedup candidates → batched LLM call rates each for closeness (HIGH/MEDIUM/LOW) + overlap + differentiator → 1 LLM synthesis for an overall positioning read. Deliberately **no local SPECTER2/torch** (avoids the docling/torch import-order segfault footgun + heavy cold-starts); S2 relevance + LLM re-rank is v1, SPECTER2 embedding re-rank is a clean phase-2 add.
+- **`api/storage.py`** — `_novelty_key` + `upload/get/delete_novelty_report` (clone of the audit-report R2 helpers); `delete_novelty_report` wired into the paper-delete cleanup loop.
+- **`api/main.py`** — `POST /papers/{id}/novelty/stream`, a near-exact clone of `audit_paper_stream` (cache-serve → `run_in_executor` → SSE), guarded by `enforce_audit_quota`, usage recorded as `kind="audit"` (shares the audit pool, consistent with the v1 quota decision).
+
+### Frontend
+- **`frontend/src/components/NoveltyPanel.jsx`** (new) — clone of `AuditPanel`'s SSE/staged-progress shell; renders the related-work list (closeness badge, out-links to real papers, overlap/"your angle" lines) + a synthesis card with positioning bullets. Accent fuchsia `#f472b6` (distinct from review-violet / audit-cyan).
+- **`frontend/src/api.js`** — `noveltyScanStream(paperId, onEvent, force)`.
+- **`frontend/src/pages/DraftReviewPage.jsx`** — third "Novelty Scan" tab.
+
+### Verified
+- `import ingestion.novelty_scout` clean; `import api.main` boots with the route wired (via `venv/`).
+- `npm run build` passes clean.
+- Live S2 request path exercised: request is well-formed, **429 (rate-limit) handling works** (retry-once → graceful empty state, no crash).
+
+### NOT done / operational flags — pick up here
+1. **⚠️ Needs a `SEMANTIC_SCHOLAR_API_KEY` to be reliable (manual, user's end).** The code already reads it (`api/storage`-style env pattern; falls back to unauthenticated). Right now no key is set, and S2's *unauthenticated* public pool 429s constantly (~1 req/sec shared globally) — so without a key the scan will usually show the "no related papers / rate-limited" empty state. Free key: https://www.semanticscholar.org/product/api → add `SEMANTIC_SCHOLAR_API_KEY=...` to `.env`. (Same key also makes the existing Discover feature reliable.)
+2. **Parse path not yet exercised against a live 200** (only the 429 branch, because the pool was throttling during the build). The parse block mirrors the proven `discovery/sources/semantic_scholar.py`, so it's trusted by parity — but confirm on first real run with a key.
+3. **No browser click-through yet** — same as Feature 1. Run backend + `npm run dev`, open a draft → Novelty Scan tab, confirm it streams stages and renders the list.
+4. **Not committed.** New: `ingestion/novelty_scout.py`, `frontend/src/components/NoveltyPanel.jsx`. Modified: `api/main.py`, `api/storage.py`, `frontend/src/api.js`, `frontend/src/pages/DraftReviewPage.jsx`. (User commits everything themselves.)
 
 ---
 
@@ -82,3 +109,69 @@ None of these have been scoped into a plan yet — treat this list as a starting
 - Both audit engines (`ingestion/claim_auditor.py`, `ingestion/reviewer_auditor.py`) take only a `paper_id` and read from a per-paper Chroma collection — no Postgres/venue/publication-status coupling. Keep it that way; it's what made this feature cheap.
 - No migration framework exists — schema changes are idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` statements inside each module's `_ensure_schema()`, run at import time. Follow that pattern, don't introduce Alembic or similar.
 - Deploy checklist (separate, unrelated track) lives in `final_day.md` — don't merge these two documents' concerns.
+
+---
+
+## 6. Feature #3 — Venue-fit / structure check (code-complete 2026-07-10)
+
+A fourth tab ("Venue Fit") in the draft reviewer. Sibling of the reviewer audit, but a *presence/completeness* check rather than a quality judgement: does the draft CONTAIN the structural components a target venue expects (Limitations — mandatory at ACL; Broader Impacts — NeurIPS; Reproducibility — ICLR; Ethics; etc.)? **No external API — fully testable in a browser today** (this was the deliberate reason it was built before citation-gap, which needs the S2 key).
+
+### Backend
+- **`ingestion/structure_auditor.py`** (new) — `check_structure(paper_id, venue="generic", on_progress) -> dict` + `list_venues()`. Same coverage-first design as `reviewer_auditor` (section map + per-component `hybrid_retrieve` + deterministic **MISSING→THIN guard** when a matching section exists). Rubric = a component registry (`related_work`, `method`, `experiments`, `limitations`, `ethics`, `broader_impacts`, `reproducibility`, `conclusion`) composed per venue (`generic`/`neurips`/`icml`/`iclr`/`acl`/`emnlp`/`cvpr`) with a `required` flag. **Severity is deterministic** from `(required, verdict)` — a *required* component that's MISSING is high-severity (the headline `required_missing` count). Lazy retriever/torch imports mirror `reviewer_auditor` (import-order footgun).
+- **`api/storage.py`** — `upload/get/delete_structure_report`, single key `{paper_id}.structure.json` with the venue stored *inside* the blob; delete wired into paper cleanup.
+- **`api/main.py`** — `GET /venues` (static selector list) + `POST /papers/{id}/structure/stream?venue=&force=`, cloned from the audit stream. **Venue-aware cache:** a cached report is served only when `cached["venue"] == requested venue`, else recompute (keeps deletion to one key). `enforce_audit_quota`, `kind="audit"`.
+
+### Frontend
+- **`frontend/src/components/StructurePanel.jsx`** (new) — clone of the audit shell + a **venue `<select>`** (changing it re-runs the check; venue is in the effect deps). Renders the component checklist (PRESENT/THIN/MISSING with a `required` tag, a per-item `fix` line, evidence via `PDFPreviewPanel`), a completeness ring, and a red **required-missing banner**. Accent amber `#fbbf24`.
+- **`frontend/src/components/MetricRing.jsx`** — added an `amber` accent case (shared component; cyan/violet were the only options).
+- **`frontend/src/api.js`** — `structureCheckStream(paperId, venue, onEvent, force)` + `getVenues()`.
+- **`frontend/src/pages/DraftReviewPage.jsx`** — fourth "Venue Fit" tab (the empty-state row now `flex-wrap`s for four tabs).
+
+### Verified
+- `import ingestion.structure_auditor` + `import api.main` boot clean (venues load, ACL correctly marks Limitations `required`).
+- Deterministic layer unit-checked offline: MISSING→THIN guard, `(required,verdict)`→severity, evidence-ref resolution, fix-cleared-for-PRESENT all pass.
+- `npm run build` clean.
+
+### NOT done — pick up here
+1. **Browser click-through** — open a draft → Venue Fit tab, switch venues (Generic → ACL → NeurIPS) and confirm each re-runs and the required-missing banner/severity reflect the venue. Fully unblocked (no key needed).
+2. **Not committed.** New: `ingestion/structure_auditor.py`, `frontend/src/components/StructurePanel.jsx`. Modified: `api/main.py`, `api/storage.py`, `frontend/src/api.js`, `frontend/src/components/MetricRing.jsx`, `frontend/src/pages/DraftReviewPage.jsx`.
+
+---
+
+## 7. Feature #4 — Numbers Check (code-complete 2026-07-10)
+
+A fifth tab ("Numbers Check"). Cousin of the Claim Audit, but reshaped to avoid overlap: where Claim Audit judges *qualitative* claims ("significantly outperforms"), this reconciles *exact figures* — the abstract says "92.4 F1 on SQuAD", does a results table actually show 92.4? Catches stale numbers, copy-paste/transcription slips, and abstract↔results drift. **No external API — fully browser-testable now.**
+
+### Backend
+- **`ingestion/numbers_auditor.py`** (new) — `audit_numbers(paper_id, on_progress) -> dict`, modelled directly on `claim_auditor` (extract from abstract/intro/conclusion → retrieve results/table evidence biased with `_EVIDENCE_BOOST` → batched verdicts). Verdicts **MATCH / MISMATCH / NOT_FOUND**. Inherits claim_auditor's conservative stance: a **MISMATCH must cite both an evidence chunk AND the conflicting `found_value`**, else it's downgraded to NOT_FOUND (never accuse without showing the two numbers). `consistency_score = matched / (matched + mismatched)` — NOT_FOUND excluded from the denominator (retrieval may have missed it). Table linearization is what makes the abstract-number → table-cell comparison work.
+- **`api/storage.py`** — `upload/get/delete_numbers_report` (key `{paper_id}.numbers.json`); delete wired into paper cleanup.
+- **`api/main.py`** — `POST /papers/{id}/numbers/stream`, clone of the audit stream, `enforce_audit_quota`, `kind="audit"`.
+
+### Frontend
+- **`frontend/src/components/NumbersPanel.jsx`** (new) — clone of the audit shell; mismatch cards show the discrepancy inline (`abstract: 92.4 → results: 91.2`), a red mismatch banner, NOT_FOUND surfaced as a manual-check nudge, MATCH behind a toggle, evidence via `PDFPreviewPanel`. Accent emerald `#34d399`.
+- **`frontend/src/components/MetricRing.jsx`** — added an `emerald` accent case.
+- **`frontend/src/api.js`** — `numbersCheckStream(paperId, onEvent, force)`.
+- **`frontend/src/pages/DraftReviewPage.jsx`** — fifth "Numbers Check" tab.
+
+### Verified
+- `import ingestion.numbers_auditor` + `import api.main` boot clean.
+- Downgrade guard unit-checked offline: MISMATCH without a cited chunk → NOT_FOUND; MISMATCH with cite+value → stays, keeps `found_value`; MISMATCH with cite but no value → NOT_FOUND. All pass.
+- `npm run build` clean.
+
+### NOT done — pick up here
+1. **Browser click-through** — open a draft → Numbers Check tab, confirm it streams + renders; ideally test on a draft with a *known* abstract/results number mismatch to see a real MISMATCH card. Fully unblocked.
+2. **Not committed.** New: `ingestion/numbers_auditor.py`, `frontend/src/components/NumbersPanel.jsx`. Modified: `api/main.py`, `api/storage.py`, `frontend/src/api.js`, `frontend/src/components/MetricRing.jsx`, `frontend/src/pages/DraftReviewPage.jsx`.
+
+---
+
+## Write-mode reviewer — current tab inventory (as of 2026-07-10)
+
+Five tabs in `DraftReviewPage`, all code-complete, **none yet browser-tested**:
+1. **Weakness Review** (`reviewer_auditor`) — methodological bar vs venue norms.
+2. **Claim Audit** (`claim_auditor`) — qualitative claims vs own evidence.
+3. **Novelty Scan** (`novelty_scout`) — closest prior work via Semantic Scholar. *Needs `SEMANTIC_SCHOLAR_API_KEY` for reliability (§5).* 
+4. **Venue Fit** (`structure_auditor`) — expected-section presence per venue (§6). No external dep.
+5. **Numbers Check** (`numbers_auditor`) — abstract figures vs results tables (§7). No external dep.
+
+Remaining queued: **#2 citation-gap** (key-blocked, like novelty). The whole track still sits ahead of the deploy work in `final_day.md`.
+

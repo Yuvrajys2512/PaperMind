@@ -164,6 +164,50 @@ export async function reviewPaperStream(paperId, onEvent, force = false) {
   return consumeSSE(res, onEvent)
 }
 
+// Novelty / related-work scan (write mode) — streams progress while the draft's
+// abstract is distilled into search queries, matched against the literature via
+// Semantic Scholar, and each neighbour rated for closeness. Pass force=true to
+// recompute and bypass the cached report.
+export async function noveltyScanStream(paperId, onEvent, force = false) {
+  const res = await fetch(`${BASE}/papers/${paperId}/novelty/stream${force ? '?force=1' : ''}`, {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', ...await authHeaders() },
+  })
+  return consumeSSE(res, onEvent)
+}
+
+// Target venues (+ labels) for the structure-check selector.
+export async function getVenues() {
+  const res = await fetch(`${BASE}/venues`, { headers: await authHeaders() })
+  if (!res.ok) throw new Error('Failed to load venues')
+  return (await res.json()).venues
+}
+
+// Venue-fit / structure check (write mode) — streams progress while the draft is
+// checked for the structural components a target venue expects (Limitations,
+// Ethics, Reproducibility, …). Report is venue-specific; pass force=true to
+// recompute and bypass the cached report.
+export async function structureCheckStream(paperId, venue, onEvent, force = false) {
+  const qs = new URLSearchParams({ venue })
+  if (force) qs.set('force', '1')
+  const res = await fetch(`${BASE}/papers/${paperId}/structure/stream?${qs.toString()}`, {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', ...await authHeaders() },
+  })
+  return consumeSSE(res, onEvent)
+}
+
+// Numbers-consistency check (write mode) — streams progress while the figures in
+// the draft's abstract/intro are reconciled against its results tables. Pass
+// force=true to recompute and bypass the cached report.
+export async function numbersCheckStream(paperId, onEvent, force = false) {
+  const res = await fetch(`${BASE}/papers/${paperId}/numbers/stream${force ? '?force=1' : ''}`, {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', ...await authHeaders() },
+  })
+  return consumeSSE(res, onEvent)
+}
+
 /* ─────────────────────────────────────────────────────────────────
    Discovery — live paper search + import
 ───────────────────────────────────────────────────────────────── */

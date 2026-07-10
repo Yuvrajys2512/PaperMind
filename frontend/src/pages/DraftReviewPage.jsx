@@ -1,8 +1,14 @@
 import { useState } from 'react'
 import ReviewPanel from '../components/ReviewPanel'
 import AuditPanel from '../components/AuditPanel'
+import NoveltyPanel from '../components/NoveltyPanel'
+import StructurePanel from '../components/StructurePanel'
+import NumbersPanel from '../components/NumbersPanel'
 
 const ACCENT = '#a78bfa'
+const NOVELTY_ACCENT = '#f472b6'
+const STRUCTURE_ACCENT = '#fbbf24'
+const NUMBERS_ACCENT = '#34d399'
 
 function TabButton({ active, onClick, color, children }) {
   return (
@@ -19,7 +25,7 @@ function TabButton({ active, onClick, color, children }) {
 }
 
 export default function DraftReviewPage({ draft, onBack }) {
-  const [activeTab, setActiveTab] = useState('review') // 'review' | 'audit' | null
+  const [activeTab, setActiveTab] = useState('review') // 'review' | 'audit' | 'novelty' | 'structure' | 'numbers' | null
 
   const displayName = draft?.filename?.replace(/\.pdf$/i, '') || 'Draft'
 
@@ -65,6 +71,15 @@ export default function DraftReviewPage({ draft, onBack }) {
           <TabButton active={activeTab === 'audit'} onClick={() => setActiveTab('audit')} color="#00f5ff">
             Claim Audit
           </TabButton>
+          <TabButton active={activeTab === 'novelty'} onClick={() => setActiveTab('novelty')} color={NOVELTY_ACCENT}>
+            Novelty Scan
+          </TabButton>
+          <TabButton active={activeTab === 'structure'} onClick={() => setActiveTab('structure')} color={STRUCTURE_ACCENT}>
+            Venue Fit
+          </TabButton>
+          <TabButton active={activeTab === 'numbers'} onClick={() => setActiveTab('numbers')} color={NUMBERS_ACCENT}>
+            Numbers Check
+          </TabButton>
         </div>
       </div>
 
@@ -77,10 +92,16 @@ export default function DraftReviewPage({ draft, onBack }) {
           <p className="text-gray-600 text-sm max-w-sm leading-relaxed mb-6">
             Weakness Review grades your draft against methodological norms a reviewer would check.
             Claim Audit checks that your abstract/intro/conclusion claims are backed by your own results.
+            Novelty Scan searches the literature for the closest prior work and how to position against it.
+            Venue Fit checks your draft has the sections a target venue expects.
+            Numbers Check reconciles the figures in your abstract against your results.
           </p>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-3">
             <TabButton active={false} onClick={() => setActiveTab('review')} color={ACCENT}>Weakness Review</TabButton>
             <TabButton active={false} onClick={() => setActiveTab('audit')} color="#00f5ff">Claim Audit</TabButton>
+            <TabButton active={false} onClick={() => setActiveTab('novelty')} color={NOVELTY_ACCENT}>Novelty Scan</TabButton>
+            <TabButton active={false} onClick={() => setActiveTab('structure')} color={STRUCTURE_ACCENT}>Venue Fit</TabButton>
+            <TabButton active={false} onClick={() => setActiveTab('numbers')} color={NUMBERS_ACCENT}>Numbers Check</TabButton>
           </div>
         </div>
       )}
@@ -93,6 +114,21 @@ export default function DraftReviewPage({ draft, onBack }) {
       {activeTab === 'audit' && (
         <div className="relative z-10 px-8 py-8">
           <AuditPanel paperId={draft.paper_id} onClose={() => setActiveTab(null)} embedded />
+        </div>
+      )}
+      {activeTab === 'novelty' && (
+        <div className="relative z-10 px-8 py-8">
+          <NoveltyPanel paperId={draft.paper_id} onClose={() => setActiveTab(null)} embedded />
+        </div>
+      )}
+      {activeTab === 'structure' && (
+        <div className="relative z-10 px-8 py-8">
+          <StructurePanel paperId={draft.paper_id} onClose={() => setActiveTab(null)} embedded />
+        </div>
+      )}
+      {activeTab === 'numbers' && (
+        <div className="relative z-10 px-8 py-8">
+          <NumbersPanel paperId={draft.paper_id} onClose={() => setActiveTab(null)} embedded />
         </div>
       )}
     </div>
