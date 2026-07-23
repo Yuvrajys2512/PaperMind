@@ -2,28 +2,16 @@ import { SignInButton, SignUpButton } from '@clerk/clerk-react'
 import { track } from '../analytics'
 import Wordmark from '../components/Wordmark'
 import CitedAnswer from '../components/CitedAnswer'
+import Backdrop from '../components/Backdrop'
 
 const ACCENT = '#22d3ee'
-
-/* Quiet dot-grid, faded at the edges — matches UploadPage. No orbs, no glass. */
-function Backdrop() {
-  return (
-    <div className="fixed inset-0 pointer-events-none" style={{
-      backgroundImage: 'radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px)',
-      backgroundSize: '26px 26px',
-      maskImage: 'radial-gradient(ellipse 90% 70% at 50% 22%, #000 35%, transparent 100%)',
-      WebkitMaskImage: 'radial-gradient(ellipse 90% 70% at 50% 22%, #000 35%, transparent 100%)',
-      zIndex: 0,
-    }} />
-  )
-}
 
 /* One accented call-to-action, wrapping Clerk's sign-up modal. */
 function PrimaryCTA({ children, from }) {
   return (
     <SignUpButton mode="modal">
       <button onClick={() => track('upgrade_clicked', { from })}
-        className="text-sm font-semibold px-5 py-2.5 rounded-xl transition-opacity hover:opacity-90"
+        className="text-sm font-semibold px-5 py-2.5 rounded-xl transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0b0e]"
         style={{ background: ACCENT, color: '#0a0b0e' }}>
         {children}
       </button>
@@ -85,7 +73,7 @@ function PlanCard({ name, price, period, features, cta, highlight }) {
 export default function LandingPage() {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#0a0b0e', position: 'relative' }}>
-      <Backdrop />
+      <Backdrop maskY={22} />
 
       {/* ── NAV ── */}
       <nav
@@ -95,7 +83,7 @@ export default function LandingPage() {
         <Wordmark accent={ACCENT} />
         <div className="flex items-center gap-4">
           <SignInButton mode="modal">
-            <button className="text-sm font-medium text-gray-200 hover:text-white transition-colors">Sign in</button>
+            <button className="text-sm font-medium text-gray-200 hover:text-white transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0b0e]">Sign in</button>
           </SignInButton>
           <PrimaryCTA from="landing_nav">Get started</PrimaryCTA>
         </div>
@@ -113,7 +101,7 @@ export default function LandingPage() {
               </span>
             </div>
 
-            <h1 className="ed-reveal text-5xl md:text-6xl font-semibold mb-6 tracking-[-0.02em] leading-[1.03] text-white"
+            <h1 className="ed-reveal text-balance text-5xl md:text-6xl font-semibold mb-6 tracking-[-0.02em] leading-[1.03] text-white"
               style={{ animationDelay: '80ms', fontFamily: 'var(--font-display)' }}>
               Read papers<br />
               you can{' '}
@@ -133,9 +121,9 @@ export default function LandingPage() {
             <div className="ed-reveal flex items-center gap-5" style={{ animationDelay: '240ms' }}>
               <PrimaryCTA from="landing_hero">Start free</PrimaryCTA>
               <SignInButton mode="modal">
-                <button className="text-sm text-gray-300 hover:text-white transition-colors inline-flex items-center gap-1.5">
+                <button className="text-sm text-gray-300 hover:text-white transition-colors inline-flex items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0b0e]">
                   I already have an account
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
                   </svg>
                 </button>
@@ -156,7 +144,7 @@ export default function LandingPage() {
       <section className="relative z-10 px-6 md:px-10 pb-20">
         <div className="w-full max-w-4xl mx-auto">
           <h2 className="text-[13px] uppercase tracking-[0.18em] text-gray-500 mb-2" style={{ fontFamily: 'var(--font-mono)' }}>
-            What it does
+            What It Does
           </h2>
           <div className="grid sm:grid-cols-2 gap-x-12" style={{ borderTop: '1px solid rgba(255,255,255,0.09)' }}>
             <div>
@@ -182,15 +170,15 @@ export default function LandingPage() {
       {/* ── PRICING ── */}
       <section className="relative z-10 px-6 md:px-10 pb-20">
         <div className="w-full max-w-3xl mx-auto">
-          <h2 className="text-2xl font-semibold text-white text-center mb-2" style={{ fontFamily: 'var(--font-display)' }}>
-            Simple pricing
+          <h2 className="text-2xl font-semibold text-white text-center mb-2 text-balance" style={{ fontFamily: 'var(--font-display)' }}>
+            Simple Pricing
           </h2>
           <p className="text-gray-500 text-sm text-center mb-8">Start free. Upgrade when you need more.</p>
           <div className="grid sm:grid-cols-2 gap-4">
             <PlanCard name="Free" price="$0"
               features={['3 papers', '20 queries / month', 'Exact-section citations', 'Evidence-graded answers']}
               cta={<SignUpButton mode="modal">
-                <button className="text-sm font-semibold px-4 py-2.5 rounded-xl w-full transition-colors"
+                <button className="text-sm font-semibold px-4 py-2.5 rounded-xl w-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0b0e]"
                   style={{ background: 'rgba(255,255,255,0.06)', color: '#fff', border: '1px solid rgba(255,255,255,0.1)' }}>
                   Start free
                 </button>
@@ -199,7 +187,7 @@ export default function LandingPage() {
               features={['Unlimited papers', 'Unlimited queries', 'Write-mode audits', 'Priority processing']}
               cta={<SignUpButton mode="modal">
                 <button onClick={() => track('upgrade_clicked', { from: 'landing_pricing' })}
-                  className="text-sm font-semibold px-4 py-2.5 rounded-xl w-full transition-opacity hover:opacity-90"
+                  className="text-sm font-semibold px-4 py-2.5 rounded-xl w-full transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0b0e]"
                   style={{ background: ACCENT, color: '#0a0b0e' }}>
                   Get Pro
                 </button>
@@ -215,8 +203,8 @@ export default function LandingPage() {
           PaperMind · cites the exact section
         </span>
         <div className="flex items-center gap-5 text-[12px] text-gray-500">
-          <a href="#/terms" className="hover:text-gray-300 transition-colors">Terms</a>
-          <a href="#/privacy" className="hover:text-gray-300 transition-colors">Privacy</a>
+          <a href="#/terms" className="hover:text-gray-300 transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0b0e]">Terms</a>
+          <a href="#/privacy" className="hover:text-gray-300 transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0b0e]">Privacy</a>
         </div>
       </footer>
     </div>

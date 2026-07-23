@@ -13,13 +13,13 @@ export default function CitedAnswer() {
     >
       {/* window chrome */}
       <div
-        className="flex items-center gap-1.5 px-4 py-3"
+        className="flex items-center gap-1.5 px-4 py-3 min-w-0"
         style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}
       >
-        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.14)' }} />
-        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.14)' }} />
-        <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.14)' }} />
-        <span className="ml-2 text-[10px] text-gray-500 truncate" style={{ fontFamily: 'var(--font-mono)' }}>
+        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: 'rgba(255,255,255,0.14)' }} aria-hidden="true" />
+        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: 'rgba(255,255,255,0.14)' }} aria-hidden="true" />
+        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: 'rgba(255,255,255,0.14)' }} aria-hidden="true" />
+        <span className="ml-2 text-[10px] text-gray-500 truncate min-w-0" style={{ fontFamily: 'var(--font-mono)' }}>
           attention-is-all-you-need.pdf
         </span>
       </div>

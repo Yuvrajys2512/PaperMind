@@ -7,6 +7,10 @@
 }
 
 @layer base {
+  html {
+    color-scheme: dark;
+  }
+
   body {
     background: #020209;
     @apply text-gray-100 antialiased;

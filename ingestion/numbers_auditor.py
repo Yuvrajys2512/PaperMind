@@ -32,6 +32,7 @@ audit_numbers(paper_id, on_progress=None) -> dict
 
 from __future__ import annotations
 
+import re
 import time
 
 from ingestion.retriever import get_all_chunks
@@ -259,6 +260,25 @@ def _verdict_batch(batch: list[dict]) -> list[dict]:
     return verdicts if isinstance(verdicts, list) else []
 
 
+_MAGNITUDE = {"K": 1e3, "M": 1e6, "B": 1e9}
+
+
+def _numeric_value(s: str) -> float | None:
+    """Pull the leading number out of a value string ('3.5 days' -> 3.5,
+    '1.2M' -> 1200000.0, '92.4%' -> 92.4), or None if nothing parses."""
+    if not s:
+        return None
+    m = re.search(r"[-+]?\d[\d,]*\.?\d*", s.strip())
+    if not m:
+        return None
+    try:
+        val = float(m.group(0).replace(",", ""))
+    except ValueError:
+        return None
+    suffix = s[m.end():m.end() + 1].strip().upper()
+    return val * _MAGNITUDE[suffix] if suffix in _MAGNITUDE else val
+
+
 def _attach_verdict(num_obj: dict, evidence: list[dict], verdict: dict | None) -> dict:
     """Merge a raw model verdict with the cited chunk's metadata, applying the
     conservative downgrade: a MISMATCH without a cited chunk AND a found value is
@@ -286,6 +306,18 @@ def _attach_verdict(num_obj: dict, evidence: list[dict], verdict: dict | None) -
             "section_type": meta.get("section_type", "text"),
             "quote":        c.get("text", "")[:600],
         }
+
+    # Guard: the model sometimes flags MISMATCH over a dataset/task attribution
+    # doubt while the figure it found is numerically identical to the claim
+    # (e.g. claim "3.5" vs found "3.5 days") — that contradicts the system
+    # prompt's own "different dataset isn't a mismatch" rule, so treat equal
+    # numbers as a match regardless of the model's stated reasoning.
+    if v == "MISMATCH" and found_value:
+        claimed_num, found_num = _numeric_value(num_obj["value"]), _numeric_value(found_value)
+        if claimed_num is not None and found_num is not None:
+            tolerance = max(1e-9, 0.005 * max(abs(claimed_num), abs(found_num)))
+            if abs(claimed_num - found_num) <= tolerance:
+                v = "MATCH"
 
     # Conservative downgrade: a mismatch we can't show (no cited chunk or no
     # concrete found value) is not a mismatch.
