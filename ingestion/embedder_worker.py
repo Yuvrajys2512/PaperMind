@@ -17,6 +17,8 @@ def main():
     
     with open(json_path, 'r', encoding='utf-8') as f:
         chunks = json.load(f)
+
+        
         
     print(f"[embedder_worker] Loaded {len(chunks)} chunks from {json_path}")
     embed_and_store(chunks, paper_name)

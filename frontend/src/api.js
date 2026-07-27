@@ -208,6 +208,18 @@ export async function numbersCheckStream(paperId, onEvent, force = false) {
   return consumeSSE(res, onEvent)
 }
 
+// Citation gap check (write mode) — streams progress while the draft's body is
+// scanned for statements that assert something citable with no citation marker,
+// and Semantic Scholar is queried for the references that may be missing. Pass
+// force=true to recompute and bypass the cached report.
+export async function citationGapStream(paperId, onEvent, force = false) {
+  const res = await fetch(`${BASE}/papers/${paperId}/citation-gaps/stream${force ? '?force=1' : ''}`, {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', ...await authHeaders() },
+  })
+  return consumeSSE(res, onEvent)
+}
+
 /* ─────────────────────────────────────────────────────────────────
    Discovery — live paper search + import
 ───────────────────────────────────────────────────────────────── */

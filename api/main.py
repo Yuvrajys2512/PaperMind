@@ -19,6 +19,7 @@ from ingestion.reviewer_auditor import review_paper
 from ingestion.novelty_scout import find_related_work
 from ingestion.structure_auditor import check_structure, list_venues
 from ingestion.numbers_auditor import audit_numbers
+from ingestion.citation_gap_auditor import audit_citation_gaps
 from ingestion.rewriter import rewrite_text
 from ingestion.llm_client import get_stats, reset_stats
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Depends, Request
@@ -59,6 +60,9 @@ from api.storage import (
     upload_numbers_report,
     get_numbers_report,
     delete_numbers_report,
+    upload_citation_gap_report,
+    get_citation_gap_report,
+    delete_citation_gap_report,
 )
 from api.usage import (
     enforce_paper_quota,
@@ -362,6 +366,7 @@ def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_cur
             (delete_novelty_report, "delete_novelty_report"),
             (delete_structure_report, "delete_structure_report"),
             (delete_numbers_report, "delete_numbers_report"),
+            (delete_citation_gap_report, "delete_citation_gap_report"),
         ):
             try:
                 _drop(paper_id)
@@ -1695,6 +1700,147 @@ async def numbers_check_stream(
                         "paper_id": paper_id,
                         "numbers_checked": report.get("numbers_checked", 0),
                         "mismatched": report.get("mismatched", 0),
+                    },
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                )
+                report["request_id"] = req_id
+                report["cached"] = False
+                yield _sse_format("done", report)
+                return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Citation gap check — write-mode "[citation needed]" pass (SSE)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Mirror image of the claim audit: instead of checking the draft's claims against
+# its own evidence, it finds statements that assert something about the OUTSIDE
+# world with no citation, and (for a bounded sample) asks Semantic Scholar
+# whether a plausible missing reference exists. Closest sibling of the novelty
+# scan — external-API-backed, cacheable, no venue parameter — so it clones that
+# endpoint's shape, including the 180s timeout for the S2 + LLM slow path.
+# Shares the audit quota pool (kind="audit").
+
+@app.post("/papers/{paper_id}/citation-gaps/stream")
+async def citation_gap_stream(
+    paper_id: str,
+    request: Request,
+    force: bool = False,
+    user_id: str = Depends(enforce_audit_quota),
+):
+    req_id = generate_request_id()
+    loop   = asyncio.get_running_loop()
+    t0     = time.monotonic()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    paper = get_readable_paper(paper_id, user_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paper is not ready yet. Current status: {paper['status']}",
+        )
+
+    # Serve the cached report instantly when present (no LLM, no usage recorded).
+    if not force:
+        cached = get_citation_gap_report(paper_id)
+        if cached:
+            async def cached_stream():
+                yield _sse_format("open", {"req_id": req_id})
+                cached["cached"] = True
+                yield _sse_format("done", cached)
+            return StreamingResponse(
+                cached_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    on_progress = _make_progress_pusher(queue, loop)
+
+    async def run_check():
+        try:
+            def fn():
+                # reset_stats/get_stats are thread-local — run them in the same
+                # executor thread as the LLM work so the usage numbers are this
+                # check's only. Lock the paper like a query so a concurrent
+                # delete/query can't pull Chroma state out from under us.
+                with paper_locked(paper_id):
+                    reset_stats()
+                    report = audit_citation_gaps(paper_id, on_progress=on_progress)
+                    return report, get_stats()
+
+            report, stats = await asyncio.wait_for(
+                loop.run_in_executor(None, fn),
+                timeout=180.0,
+            )
+            await queue.put(("done", (report, stats)))
+        except asyncio.TimeoutError:
+            log_operation(
+                "citation_gap_check", "error", req_id=req_id, user_id=user_id,
+                error="timeout", context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {
+                "message": "Citation gap check timed out — the literature search may be slow right now. Please try again.",
+            }))
+        except Exception as exc:
+            log_operation(
+                "citation_gap_check", "error", req_id=req_id, user_id=user_id,
+                error=exc, context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {"message": f"Citation gap check failed: {exc}"}))
+
+    asyncio.create_task(run_check())
+
+    async def event_stream():
+        yield _sse_format("open", {"req_id": req_id})
+
+        while True:
+            kind, payload = await queue.get()
+
+            if kind == "progress":
+                yield _sse_format("progress", payload)
+                continue
+
+            if kind == "error":
+                yield _sse_format("error", payload)
+                return
+
+            if kind == "done":
+                report, stats = payload
+                # Only record usage + cache when the check actually produced a
+                # report (a hard failure shouldn't be cached or billed).
+                if not report.get("audit_failed"):
+                    try:
+                        upload_citation_gap_report(paper_id, report)
+                    except Exception as exc:
+                        log_operation(
+                            "upload_citation_gap_report", "error", req_id=req_id,
+                            user_id=user_id, error=exc, context={"paper_id": paper_id},
+                        )
+                    record_usage(
+                        user_id=user_id,
+                        kind="audit",
+                        req_id=req_id,
+                        paper_id=paper_id,
+                        llm_calls=stats["call_count"],
+                        tokens_in=stats["tokens_in"],
+                        tokens_out=stats["tokens_out"],
+                        cost_usd=stats["cost_usd"],
+                    )
+                log_operation(
+                    "citation_gap_check", "success", req_id=req_id, user_id=user_id,
+                    context={
+                        "paper_id": paper_id,
+                        "gaps_found": report.get("gaps_found", 0),
                     },
                     duration_ms=round((time.monotonic() - t0) * 1000),
                 )

@@ -402,3 +402,41 @@ def get_numbers_report(paper_id: str) -> dict | None:
 def delete_numbers_report(paper_id: str):
     """Best-effort delete of a paper's cached numbers report."""
     _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_numbers_key(paper_id))
+
+
+# ── Citation-gap reports (Cloudflare R2) ──────────────────────────────────────
+# Write-mode citation gap check (citation_gap_auditor) — same caching rationale
+# as the audits above: an opaque JSON document keyed only by paper_id.
+
+def _citation_gap_key(paper_id: str) -> str:
+    return f"{paper_id}.citation_gaps.json"
+
+
+def upload_citation_gap_report(paper_id: str, report: dict):
+    """Persist a citation-gap report as a JSON blob in R2."""
+    _s3.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=_citation_gap_key(paper_id),
+        Body=json.dumps(report).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def get_citation_gap_report(paper_id: str) -> dict | None:
+    """Return the cached citation-gap report for a paper, or None if none exists."""
+    try:
+        obj = _s3.get_object(Bucket=R2_BUCKET_NAME, Key=_citation_gap_key(paper_id))
+    except _s3.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        # Treat any read failure as a cache miss — the caller will recompute.
+        return None
+    try:
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_citation_gap_report(paper_id: str):
+    """Best-effort delete of a paper's cached citation-gap report."""
+    _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_citation_gap_key(paper_id))
