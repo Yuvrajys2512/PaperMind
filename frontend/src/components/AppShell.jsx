@@ -20,9 +20,52 @@ const ICONS = {
    screens, a slim icon-only top bar below md. Pure CSS breakpoint swap —
    no JS width measurement, no drawer/open-close state. Backdrop stays a
    page-level concern; this component owns nav only. */
+/* Free-tier quota readout.
+
+   This exists because the sidebar used to contradict the server: the Library
+   badge counted the user's papers PLUS the shared samples, while the quota
+   counts the user's papers PLUS their drafts and ignores the samples. A user
+   with "Library 5" who got "limit of 3 reached" had no way to reconcile the
+   two. The badge now counts only what the user owns; this strip shows the
+   number the server actually enforces, with drafts called out because they
+   live on a different page and are otherwise invisible here.
+
+   Hidden entirely on unlimited tiers — `papers_limit` is null for pro. */
+function QuotaStrip({ usage }) {
+  if (!usage || usage.papers_limit == null) return null
+
+  const { papers_used: used, papers_limit: limit, drafts_used: drafts = 0 } = usage
+  const atLimit = used >= limit
+  const color = atLimit ? 'rgba(248,113,113,0.9)' : 'rgba(229,231,235,0.5)'
+
+  return (
+    <div
+      className="px-3 py-2.5 mb-2 rounded-xl"
+      style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}
+      title={
+        'Drafts count toward this limit. The shared sample papers do not.'
+      }
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[10px] uppercase tracking-[0.16em] text-gray-600 font-bold" style={{ fontFamily: 'var(--font-mono)' }}>
+          Free plan
+        </span>
+        <span className="text-[11px] font-semibold" style={{ color, fontFamily: 'var(--font-mono)' }}>
+          {used}/{limit}
+        </span>
+      </div>
+      <p className="text-[10px] leading-relaxed text-gray-600 mt-1">
+        {drafts > 0
+          ? `${used - drafts} paper${used - drafts === 1 ? '' : 's'} + ${drafts} draft${drafts === 1 ? '' : 's'}. Samples don't count.`
+          : "Drafts count too. Samples don't."}
+      </p>
+    </div>
+  )
+}
+
 export default function AppShell({
   active = 'home', onDiscover, onLibrary, onDrafts, onRewrite, onBilling, onAdmin, onNewPaper,
-  libraryBadge, children,
+  libraryBadge, usage, children,
 }) {
   const navItems = [
     { key: 'home',     label: 'Home',       icon: ICONS.home,   onClick: undefined },
@@ -61,6 +104,7 @@ export default function AppShell({
           ))}
         </nav>
 
+        <QuotaStrip usage={usage} />
         <NavButton variant="sidebar" primary icon={ICONS.plus} label="New paper" onClick={onNewPaper} />
       </aside>
 

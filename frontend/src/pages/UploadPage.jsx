@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useUser } from '@clerk/clerk-react'
-import { uploadPaper, getPaperStatus, listPapers } from '../api'
+import { uploadPaper, getPaperStatus, listPapers, getUsage } from '../api'
 import { track } from '../analytics'
 import AppShell from '../components/AppShell'
 import Backdrop from '../components/Backdrop'
@@ -144,15 +144,25 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
   const [quotaHit, setQuotaHit]             = useState(false) // last error was a 429 quota cap
   const [uploadProgress, setUploadProgress] = useState(0)
   const [papers, setPapers]                 = useState(null) // null = loading, [] = confirmed empty
+  const [usage, setUsage]                   = useState(null)
   const inputRef = useRef()
 
   useEffect(() => {
     listPapers().then(setPapers).catch(() => setPapers([]))
   }, [])
 
+  // Feeds the sidebar's free-plan strip. Best-effort: a failed /usage just
+  // hides the strip rather than blocking the page.
+  useEffect(() => {
+    getUsage().then(setUsage).catch(() => setUsage(null))
+  }, [])
+
   const [stats] = useState(computeSessionStats)
 
-  const paperCount   = papers?.filter(p => p.status === 'ready').length ?? null
+  // Only the user's OWN papers. The shared demo set is visible in Library but
+  // is quota-exempt, and counting it here made the badge disagree with the
+  // limit the server enforces (see QuotaStrip in AppShell).
+  const paperCount   = papers?.filter(p => p.status === 'ready' && !p.is_demo).length ?? null
   const recentPapers = papers
     ? [...papers]
         .sort((a, b) => new Date(b.completed_at || b.uploaded_at) - new Date(a.completed_at || a.uploaded_at))
@@ -231,6 +241,7 @@ export default function UploadPage({ onPaperReady, onDiscover, onLibrary, onDraf
         onAdmin={onAdmin}
         onNewPaper={openPicker}
         libraryBadge={paperCount}
+        usage={usage}
       >
         <div className="min-h-screen flex flex-col">
           {/* ── HERO — single column: greeting + dropzone. No marketing

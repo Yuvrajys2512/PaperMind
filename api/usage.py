@@ -165,12 +165,32 @@ def record_usage(
 
 def enforce_paper_quota(user_id: str = Depends(get_current_user_id)) -> str:
     limits = _limits_for(get_user_tier(user_id))
-    if limits is not None and len(list_papers(user_id)) >= limits["max_papers"]:
+    if limits is None:
+        return user_id
+
+    # list_papers(user_id) deliberately counts BOTH reference papers and drafts
+    # (one shared pool) and excludes the demo set. That is correct but invisible:
+    # the user sees a Library of their papers *plus* the samples, and their
+    # drafts live on a different page entirely — so "limit of 3 reached" while
+    # the sidebar reads 5 looks like a bug. The message therefore spells out
+    # both halves rather than leaving the user to guess which items count.
+    own = list_papers(user_id)
+    if len(own) >= limits["max_papers"]:
+        drafts = sum(1 for p in own if p.get("paper_type") == "draft")
+        papers = len(own) - drafts
+
+        def _n(count: int, word: str) -> str:
+            return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+        breakdown = _n(papers, "paper")
+        if drafts:
+            breakdown += f" and {_n(drafts, 'draft')}"
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Free tier limit of {limits['max_papers']} papers reached. "
-                "Delete a paper to upload a new one."
+                f"Free tier limit of {limits['max_papers']} reached — you have {breakdown}. "
+                "Drafts count toward the same limit; the shared sample papers do not. "
+                "Delete a paper or a draft to upload a new one."
             ),
         )
     return user_id
@@ -208,9 +228,16 @@ def enforce_audit_quota(user_id: str = Depends(get_current_user_id)) -> str:
 def get_usage_summary(user_id: str) -> dict:
     tier = get_user_tier(user_id)
     limits = _limits_for(tier) or {}
+    own = list_papers(user_id)
+    drafts_used = sum(1 for p in own if p.get("paper_type") == "draft")
     return {
         "tier": tier,
-        "papers_used": len(list_papers(user_id)),
+        # papers_used is the quota number: the user's own papers AND drafts,
+        # excluding the shared demo set. `drafts_used` breaks out the part the
+        # Library page never shows, so the UI can explain the total instead of
+        # contradicting it.
+        "papers_used": len(own),
+        "drafts_used": drafts_used,
         "papers_limit": limits.get("max_papers"),
         "queries_used": count_queries_this_month(user_id),
         "queries_limit": limits.get("max_queries_per_month"),
