@@ -60,16 +60,22 @@ def embed_and_store(chunks: list, paper_name: str) -> None:
     
     # Prepare metadata for each chunk
     # ChromaDB metadata values must be strings, ints, or floats — not lists
+    # `doc_index` is the chunk's position in the document as a whole, which
+    # nothing else in the metadata records: `chunk_index` restarts at 0 in every
+    # section, and several sections can share a page. Retrieval needs true
+    # reading order (see retriever.get_all_chunks), and `chunks` arrives here in
+    # document order, so the enumeration index is exactly that.
     metadatas = [
         {
             "section": chunk["section"],
             "section_type": chunk["section_type"],
             "page_num": chunk["page_num"],
             "chunk_index": chunk["chunk_index"],
+            "doc_index": i,
             "total_chunks_in_section": chunk["total_chunks_in_section"],
             "token_count": chunk["token_count"]
         }
-        for chunk in chunks
+        for i, chunk in enumerate(chunks)
     ]
     
     # Generate unique IDs for each chunk. Hashing the text keeps re-ingesting

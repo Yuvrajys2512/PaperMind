@@ -1,10 +1,10 @@
 ﻿import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { useAuth } from '@clerk/clerk-react'
 import { listPapers, deletePaper, queryPaperStream, getGlossary, getRecommendations } from '../api'
 import { track } from '../analytics'
 import ReactMarkdown from 'react-markdown'
 import { escapeHtml } from '../textUtils'
-import { MetricRing, METRIC_TOOLTIPS } from '../components/MetricRing'
+import { MetricRing } from '../components/MetricRing'
+import { METRIC_TOOLTIPS } from '../components/metricTooltips'
 import PDFPreviewPanel from '../components/PDFPreviewPanel'
 import AuditPanel from '../components/AuditPanel'
 import ReviewPanel from '../components/ReviewPanel'
@@ -900,7 +900,7 @@ function Message({ msg, paperId, isNewest, onFollowUp, scoreHistory, highlight }
     )
   }
 
-  const { answer, confidence, faithfulness, answer_relevancy, sources, attempts,
+  const { answer, sources, attempts,
     warning, grading, plan, is_comparison, reasoning_chain, request_id, trace } = msg.content
 
   // Strip any leaked scratchpad content that appears before the ESSENCE marker
@@ -1301,7 +1301,7 @@ function PaperPane({ result, paperId, paperName, label, isNewest }) {
   const [copied,     setCopied]     = useState(false)
   const [showDetail, setShowDetail] = useState(false)
 
-  const { answer, confidence, faithfulness, answer_relevancy, sources, grading, attempts } = result
+  const { answer, sources, grading, attempts } = result
 
   const parseAnswer = (text) => {
     if (!text) return { essence: '', detail: '' }

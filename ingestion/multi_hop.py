@@ -123,11 +123,18 @@ def multi_hop_retrieve(
     for q in all_queries:
         results = hybrid_retrieve(q, paper_name, top_k=retrieval_k, boost_terms=boost_terms)
         for chunk in results:
-            chunk_id = chunk["metadata"].get("chunk_id")
-            if chunk_id is None:
-                chunk_id = hash(chunk["text"])
-            if chunk_id not in seen_ids:
-                seen_ids.add(chunk_id)
+            # Dedup on the text itself. Sub-questions overlap heavily, so the
+            # same passage comes back from several retrieval passes and would
+            # otherwise be fed to the generator two or three times.
+            #
+            # This used to prefer a `chunk_id` metadata key, falling back to the
+            # text hash. That key is never stored (see embedder.embed_and_store),
+            # so the fallback always ran — and it is the better key anyway:
+            # identical text IS a duplicate for the generator's purposes, no
+            # matter which position it was retrieved from.
+            key = hash(chunk["text"])
+            if key not in seen_ids:
+                seen_ids.add(key)
                 merged_chunks.append(chunk)
 
     print(

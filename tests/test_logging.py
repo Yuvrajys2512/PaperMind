@@ -6,8 +6,6 @@ Or manually: python -m tests.test_logging
 """
 
 import json
-import tempfile
-import os
 import sys
 from pathlib import Path
 
@@ -79,7 +77,7 @@ def test_log_operation_error():
     assert record["operation"] == "test_error_op"
     assert record["status"] == "error"
     assert "Test error message" in record.get("error", "")
-    print(f"OK: Logged error operation with exception context")
+    print("OK: Logged error operation with exception context")
 
 
 def test_log_query():
@@ -109,7 +107,7 @@ def test_log_query():
     assert record["paper_id"] == "paper_test_123"
     assert record["passed"] is True
     assert record["llm_calls"] == 3
-    print(f"OK: Query logging functional")
+    print("OK: Query logging functional")
 
 
 if __name__ == "__main__":
