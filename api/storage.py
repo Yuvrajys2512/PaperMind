@@ -31,7 +31,27 @@ if not all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAM
         "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME must all be set."
     )
 
-_pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=5, open=True)
+# The one connection pool for the whole app — api/usage.py and api/billing.py
+# import this object rather than opening their own.
+#
+# `check` is not optional against Neon. Neon closes idle connections and
+# auto-suspends the compute, so a pooled connection silently goes dead; with
+# psycopg_pool's default (`check_none`) the pool hands that corpse to the next
+# request, which fails with
+#     OperationalError: consuming input failed: SSL connection has been closed
+# and returns a 500. The pool only notices when the connection is *returned*,
+# which is why the failure is transient and self-healing on reload — and why it
+# was mistaken for a quota error the first time it showed up. `check_connection`
+# costs one `SELECT 1` per checkout and discards dead connections instead of
+# failing the request. `max_idle` recycles them before Neon gets the chance.
+_pool = ConnectionPool(
+    DATABASE_URL,
+    min_size=1,
+    max_size=5,
+    open=True,
+    check=ConnectionPool.check_connection,
+    max_idle=120,
+)
 
 _s3 = boto3.client(
     "s3",
@@ -192,10 +212,24 @@ def upload_pdf(paper_id: str, local_path: str):
 
 
 def download_pdf_to_tempfile(paper_id: str) -> str:
-    """Downloads a paper's PDF from R2 into a local temp file. Caller must delete it."""
+    """Downloads a paper's PDF from R2 into a local temp file.
+
+    The caller deletes it on success. On failure this cleans up itself: mkstemp
+    has already created the file by the time the download runs, and a raising
+    download never returns the path — so the caller's own `finally` has nothing
+    to delete and the file would sit in the temp dir forever. On a long-lived
+    host every failed ingestion (missing key, network blip) would leak one file.
+    """
     fd, temp_path = tempfile.mkstemp(suffix=".pdf")
     os.close(fd)
-    _s3.download_file(R2_BUCKET_NAME, f"{paper_id}.pdf", temp_path)
+    try:
+        _s3.download_file(R2_BUCKET_NAME, f"{paper_id}.pdf", temp_path)
+    except Exception:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass  # best-effort; the download failure is the error worth raising
+        raise
     return temp_path
 
 
@@ -440,3 +474,46 @@ def get_citation_gap_report(paper_id: str) -> dict | None:
 def delete_citation_gap_report(paper_id: str):
     """Best-effort delete of a paper's cached citation-gap report."""
     _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_citation_gap_key(paper_id))
+
+
+# ── Overlap reports (Cloudflare R2) ───────────────────────────────────────────
+# Write-mode overlap / plagiarism check (plagiarism_auditor). Same caching
+# rationale as the audits above, with one wrinkle worth knowing: this report is
+# the only one whose inputs include OTHER papers. Adding a paper to the library
+# can therefore change the right answer without the draft changing at all, so a
+# cached overlap report goes stale in a way the others can't. It is still cached
+# — the check is expensive and the corpus rarely changes mid-session — and the
+# panel's re-run button is the escape hatch.
+
+def _overlap_key(paper_id: str) -> str:
+    return f"{paper_id}.overlap.json"
+
+
+def upload_overlap_report(paper_id: str, report: dict):
+    """Persist an overlap report as a JSON blob in R2."""
+    _s3.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=_overlap_key(paper_id),
+        Body=json.dumps(report).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def get_overlap_report(paper_id: str) -> dict | None:
+    """Return the cached overlap report for a paper, or None if none exists."""
+    try:
+        obj = _s3.get_object(Bucket=R2_BUCKET_NAME, Key=_overlap_key(paper_id))
+    except _s3.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        # Treat any read failure as a cache miss — the caller will recompute.
+        return None
+    try:
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_overlap_report(paper_id: str):
+    """Best-effort delete of a paper's cached overlap report."""
+    _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_overlap_key(paper_id))

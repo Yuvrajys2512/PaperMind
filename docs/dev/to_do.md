@@ -99,11 +99,25 @@
 - [ ] Add Sapling AI as fallback backend
 - [ ] Frontend: AI Detection panel — paste text → show confidence score (not binary verdict), surface uncertainty to user
 
-### 2c — Plagiarism Check
+### 2c — Plagiarism Check — **built as Write Mode tab 7 ("Overlap Check")**
 
-- [ ] Create `services/plag_checker.py` — cosine similarity search against all indexed ChromaDB papers
-- [ ] Add `POST /plag-check` endpoint — returns matched passages with similarity scores + source citations
-- [ ] Frontend: Plagiarism Check panel — paste text → expandable matched passages with similarity %
+Shipped as an audit tab on an uploaded draft rather than a paste-text panel, so it
+reuses the write-mode 4-layer pattern (engine → R2 cache → SSE endpoint → panel)
+and the shared audit quota. Two changes from the original sketch, both deliberate:
+
+- **Shingles are the primary signal, not cosine.** Cosine on academic text is high
+  everywhere — two papers on one topic score ~0.85 without sharing a sentence — so
+  cosine alone would report topical similarity as plagiarism. Word 8-grams give a
+  matched string we can *show* the author. Embeddings are kept as a secondary
+  paraphrase tier, gated behind an LLM confirmation.
+- **Scope is stated honestly in the UI.** This compares against the user's own
+  library only. The panel says so; a clean result is not a plagiarism clearance.
+
+- [x] `ingestion/plagiarism_auditor.py` — shingle index over the user's library +
+      confirmed-paraphrase pass; attribution / boilerplate / same-document guards
+- [x] `POST /papers/{paper_id}/overlap/stream` — SSE, R2-cached, shared audit quota
+- [x] Frontend `OverlapPanel.jsx` — both sides of every match, PDF jump, tab 7
+- [x] `tests/test_plagiarism_auditor.py` — 14 tests on the deterministic layer
 - [ ] (Later / paid) Hook in Copyleaks or iThenticate API for broader corpus check
 
 ---

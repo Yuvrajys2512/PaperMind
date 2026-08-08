@@ -5,12 +5,14 @@ import NoveltyPanel from '../components/NoveltyPanel'
 import StructurePanel from '../components/StructurePanel'
 import NumbersPanel from '../components/NumbersPanel'
 import CitationGapPanel from '../components/CitationGapPanel'
+import OverlapPanel from '../components/OverlapPanel'
 
 const ACCENT = '#a78bfa'
 const NOVELTY_ACCENT = '#f472b6'
 const STRUCTURE_ACCENT = '#fbbf24'
 const NUMBERS_ACCENT = '#34d399'
 const CITATION_ACCENT = '#fb7185'
+const OVERLAP_ACCENT = '#60a5fa'
 
 function TabButton({ active, onClick, color, children }) {
   return (
@@ -27,7 +29,7 @@ function TabButton({ active, onClick, color, children }) {
 }
 
 export default function DraftReviewPage({ draft, onBack }) {
-  const [activeTab, setActiveTab] = useState('review') // 'review' | 'audit' | 'novelty' | 'structure' | 'numbers' | 'citations' | null
+  const [activeTab, setActiveTab] = useState('review') // 'review' | 'audit' | 'novelty' | 'structure' | 'numbers' | 'citations' | 'overlap' | null
 
   const displayName = draft?.filename?.replace(/\.pdf$/i, '') || 'Draft'
 
@@ -66,7 +68,7 @@ export default function DraftReviewPage({ draft, onBack }) {
           </p>
         </div>
 
-        {/* Six tabs — wraps rather than overflowing on narrower viewports. */}
+        {/* Seven tabs — wraps rather than overflowing on narrower viewports. */}
         <div className="flex flex-wrap items-center justify-end gap-2 flex-shrink-0">
           <TabButton active={activeTab === 'review'} onClick={() => setActiveTab('review')} color={ACCENT}>
             Weakness Review
@@ -86,6 +88,9 @@ export default function DraftReviewPage({ draft, onBack }) {
           <TabButton active={activeTab === 'citations'} onClick={() => setActiveTab('citations')} color={CITATION_ACCENT}>
             Citation Gaps
           </TabButton>
+          <TabButton active={activeTab === 'overlap'} onClick={() => setActiveTab('overlap')} color={OVERLAP_ACCENT}>
+            Overlap Check
+          </TabButton>
         </div>
       </div>
 
@@ -102,6 +107,7 @@ export default function DraftReviewPage({ draft, onBack }) {
             Venue Fit checks your draft has the sections a target venue expects.
             Numbers Check reconciles the figures in your abstract against your results.
             Citation Gaps finds statements that need a source but have no citation.
+            Overlap Check compares your text against the other papers in your library.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <TabButton active={false} onClick={() => setActiveTab('review')} color={ACCENT}>Weakness Review</TabButton>
@@ -110,6 +116,7 @@ export default function DraftReviewPage({ draft, onBack }) {
             <TabButton active={false} onClick={() => setActiveTab('structure')} color={STRUCTURE_ACCENT}>Venue Fit</TabButton>
             <TabButton active={false} onClick={() => setActiveTab('numbers')} color={NUMBERS_ACCENT}>Numbers Check</TabButton>
             <TabButton active={false} onClick={() => setActiveTab('citations')} color={CITATION_ACCENT}>Citation Gaps</TabButton>
+            <TabButton active={false} onClick={() => setActiveTab('overlap')} color={OVERLAP_ACCENT}>Overlap Check</TabButton>
           </div>
         </div>
       )}
@@ -142,6 +149,11 @@ export default function DraftReviewPage({ draft, onBack }) {
       {activeTab === 'citations' && (
         <div className="relative z-10 px-8 py-8">
           <CitationGapPanel paperId={draft.paper_id} onClose={() => setActiveTab(null)} embedded />
+        </div>
+      )}
+      {activeTab === 'overlap' && (
+        <div className="relative z-10 px-8 py-8">
+          <OverlapPanel paperId={draft.paper_id} onClose={() => setActiveTab(null)} embedded />
         </div>
       )}
     </div>

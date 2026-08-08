@@ -220,6 +220,19 @@ export async function citationGapStream(paperId, onEvent, force = false) {
   return consumeSSE(res, onEvent)
 }
 
+// Overlap check (write mode) — streams progress while the draft's passages are
+// matched against the other papers in the user's library (verbatim runs first,
+// then a confirmed-paraphrase pass). The corpus is resolved server-side from
+// what this user can read. Pass force=true to recompute and bypass the cache —
+// worth doing after adding papers to the library, since the corpus changed.
+export async function overlapStream(paperId, onEvent, force = false) {
+  const res = await fetch(`${BASE}/papers/${paperId}/overlap/stream${force ? '?force=1' : ''}`, {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', ...await authHeaders() },
+  })
+  return consumeSSE(res, onEvent)
+}
+
 /* ─────────────────────────────────────────────────────────────────
    Discovery — live paper search + import
 ───────────────────────────────────────────────────────────────── */

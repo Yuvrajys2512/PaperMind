@@ -20,6 +20,7 @@ from ingestion.novelty_scout import find_related_work
 from ingestion.structure_auditor import check_structure, list_venues
 from ingestion.numbers_auditor import audit_numbers
 from ingestion.citation_gap_auditor import audit_citation_gaps
+from ingestion.plagiarism_auditor import audit_overlap
 from ingestion.rewriter import rewrite_text
 from ingestion.llm_client import get_stats, reset_stats
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Depends, Request
@@ -28,8 +29,7 @@ from fastapi.responses import StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
-from api.auth import get_current_user_id, require_admin
+from api.auth import get_current_user_id, require_admin, rate_limit_key
 from api.ingestion_runner import run_ingestion_from_storage, regenerate_missing_collections
 from api.logger import generate_request_id
 from api.concurrency import get_chroma_client, paper_locked
@@ -40,7 +40,6 @@ from api.storage import (
     get_readable_paper,
     list_papers,
     list_demo_papers,
-    DEMO_USER_ID,
     upload_pdf,
     get_pdf_stream,
     delete_pdf,
@@ -63,6 +62,9 @@ from api.storage import (
     upload_citation_gap_report,
     get_citation_gap_report,
     delete_citation_gap_report,
+    upload_overlap_report,
+    get_overlap_report,
+    delete_overlap_report,
 )
 from api.usage import (
     enforce_paper_quota,
@@ -73,7 +75,7 @@ from api.usage import (
     record_usage,
 )
 from api.uploads import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, PDF_MAGIC
-from api.logger import generate_request_id, log_query
+from api.logger import log_query
 from ingestion.bm25_retriever  import invalidate_bm25_cache
 from ingestion.retriever import collection_name
 from api.billing import router as billing_router
@@ -107,10 +109,14 @@ ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://local
 MAX_QUESTION_CHARS = int(os.getenv("PAPERMIND_MAX_QUESTION_CHARS", "2000"))
 MAX_REWRITE_CHARS = int(os.getenv("PAPERMIND_MAX_REWRITE_CHARS", "8000"))
 
-# Per-IP rate limiting. 120/min is generous for real humans but caps scripted
-# abuse on the public endpoints. The Stripe webhook and /health pings ride the
-# same global limit — fine at launch volume; add a path exemption if needed.
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+# Rate limiting keyed per authenticated user, falling back to IP — see
+# api.auth.rate_limit_key for why keying on the client address alone was broken
+# behind a proxy.
+#
+# 120/min was chosen when this was (nominally) per-IP. Now that it is genuinely
+# per-user it applies to one person's burst — an SSE audit plus the drafts
+# page's 3s polling fits, but raise it if real usage says otherwise.
+limiter = Limiter(key_func=rate_limit_key, default_limits=["120/minute"])
 
 app = FastAPI(
     title="PaperMind API",
@@ -367,6 +373,7 @@ def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_cur
             (delete_structure_report, "delete_structure_report"),
             (delete_numbers_report, "delete_numbers_report"),
             (delete_citation_gap_report, "delete_citation_gap_report"),
+            (delete_overlap_report, "delete_overlap_report"),
         ):
             try:
                 _drop(paper_id)
@@ -1841,6 +1848,171 @@ async def citation_gap_stream(
                     context={
                         "paper_id": paper_id,
                         "gaps_found": report.get("gaps_found", 0),
+                    },
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                )
+                report["request_id"] = req_id
+                report["cached"] = False
+                yield _sse_format("done", report)
+                return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ── Overlap check (write mode) ───────────────────────────────────────────────
+# Streams the plagiarism/overlap check: passages of the draft that also appear
+# in the other papers in the user's library. Purely local (Chroma + one gating
+# LLM call), so it clones the claim-audit shape rather than the novelty scan's.
+#
+# The one structural difference from every sibling endpoint: this check needs a
+# CORPUS, so the set of comparable papers is resolved from Postgres HERE and
+# passed into the engine. Doing the lookup in the endpoint is what keeps
+# plagiarism_auditor free of any Postgres/tenancy coupling, like the others —
+# and it also puts the security boundary in one place: a user can only ever be
+# compared against papers they can already read.
+# Shares the audit quota pool (kind="audit").
+
+def _overlap_corpus(user_id: str, paper_id: str) -> list[dict]:
+    """The papers this draft may be compared against: the user's own library
+    plus the shared demo set, minus the draft itself and anything not ready.
+
+    Demo papers are included deliberately — a new account with one draft and an
+    empty library would otherwise get an empty check with nothing to show."""
+    seen: set[str] = {paper_id}
+    corpus: list[dict] = []
+    for row in list(list_papers(user_id)) + list(list_demo_papers()):
+        pid = row["paper_id"]
+        if pid in seen or row.get("status") != "ready":
+            continue
+        seen.add(pid)
+        name = (row.get("filename") or "Untitled").rsplit(".pdf", 1)[0]
+        corpus.append({"paper_id": pid, "title": name})
+    return corpus
+
+
+@app.post("/papers/{paper_id}/overlap/stream")
+async def overlap_stream(
+    paper_id: str,
+    request: Request,
+    force: bool = False,
+    user_id: str = Depends(enforce_audit_quota),
+):
+    req_id = generate_request_id()
+    loop   = asyncio.get_running_loop()
+    t0     = time.monotonic()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    paper = get_readable_paper(paper_id, user_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    if paper["status"] != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paper is not ready yet. Current status: {paper['status']}",
+        )
+
+    # Serve the cached report instantly when present (no LLM, no usage recorded).
+    if not force:
+        cached = get_overlap_report(paper_id)
+        if cached:
+            async def cached_stream():
+                yield _sse_format("open", {"req_id": req_id})
+                cached["cached"] = True
+                yield _sse_format("done", cached)
+            return StreamingResponse(
+                cached_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    corpus = _overlap_corpus(user_id, paper_id)
+    on_progress = _make_progress_pusher(queue, loop)
+
+    async def run_check():
+        try:
+            def fn():
+                # reset_stats/get_stats are thread-local — run them in the same
+                # executor thread as the LLM work so the usage numbers are this
+                # check's only. Lock the paper like a query so a concurrent
+                # delete/query can't pull Chroma state out from under us.
+                with paper_locked(paper_id):
+                    reset_stats()
+                    report = audit_overlap(paper_id, corpus, on_progress=on_progress)
+                    return report, get_stats()
+
+            report, stats = await asyncio.wait_for(
+                loop.run_in_executor(None, fn),
+                # Longer than the local-only siblings: the cost scales with the
+                # size of the library, since every corpus paper is read out of
+                # Chroma and indexed.
+                timeout=240.0,
+            )
+            await queue.put(("done", (report, stats)))
+        except asyncio.TimeoutError:
+            log_operation(
+                "overlap_check", "error", req_id=req_id, user_id=user_id,
+                error="timeout", context={"paper_id": paper_id, "corpus": len(corpus)},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {
+                "message": "Overlap check timed out — your library may be large. Please try again.",
+            }))
+        except Exception as exc:
+            log_operation(
+                "overlap_check", "error", req_id=req_id, user_id=user_id,
+                error=exc, context={"paper_id": paper_id},
+                duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            await queue.put(("error", {"message": f"Overlap check failed: {exc}"}))
+
+    asyncio.create_task(run_check())
+
+    async def event_stream():
+        yield _sse_format("open", {"req_id": req_id})
+
+        while True:
+            kind, payload = await queue.get()
+
+            if kind == "progress":
+                yield _sse_format("progress", payload)
+                continue
+
+            if kind == "error":
+                yield _sse_format("error", payload)
+                return
+
+            if kind == "done":
+                report, stats = payload
+                # Only record usage + cache when the check actually produced a
+                # report (a hard failure shouldn't be cached or billed).
+                if not report.get("audit_failed"):
+                    try:
+                        upload_overlap_report(paper_id, report)
+                    except Exception as exc:
+                        log_operation(
+                            "upload_overlap_report", "error", req_id=req_id,
+                            user_id=user_id, error=exc, context={"paper_id": paper_id},
+                        )
+                    record_usage(
+                        user_id=user_id,
+                        kind="audit",
+                        req_id=req_id,
+                        paper_id=paper_id,
+                        llm_calls=stats["call_count"],
+                        tokens_in=stats["tokens_in"],
+                        tokens_out=stats["tokens_out"],
+                        cost_usd=stats["cost_usd"],
+                    )
+                log_operation(
+                    "overlap_check", "success", req_id=req_id, user_id=user_id,
+                    context={
+                        "paper_id": paper_id,
+                        "corpus": len(corpus),
+                        "matches_found": report.get("matches_found", 0),
                     },
                     duration_ms=round((time.monotonic() - t0) * 1000),
                 )

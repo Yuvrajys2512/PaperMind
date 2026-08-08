@@ -1,7 +1,7 @@
 # PaperMind — "Write Mode" Handoff
 
-**Last updated:** 2026-07-25
-**Status:** Write Mode is **feature-complete** — all 6 audit tabs built, browser-verified, working. The queued feature menu is exhausted. The next move is a decision, not a build (see §6).
+**Last updated:** 2026-08-06
+**Status:** Write Mode has **7 audit tabs**, all built and browser-verified. Tab 7 (Overlap Check — the plagiarism check from `docs/dev/to_do.md` §2c) is verified but **uncommitted**. The open decision in §6 is still open.
 
 ---
 
@@ -13,20 +13,20 @@
 I'm working on PaperMind at C:\Users\Yuvraj Srivastava\Desktop\Projects\PaperMind.
 
 Read write_mode_handoff.md in the repo root first — it's the full state of the
-"Write Mode" track and it's current as of 2026-07-25.
+"Write Mode" track and it's current as of 2026-08-06.
 
 Short version: Write Mode (upload your own unpublished draft -> pre-submission
-audits) is FEATURE-COMPLETE. All 6 tabs are built and browser-verified:
-Weakness Review, Claim Audit, Novelty Scan, Venue Fit, Numbers Check, and
-Citation Gaps. Tabs 1-5 are committed (through 14b53cf). The 6th (Citation
-Gaps) is code-complete, browser-verified, and UNCOMMITTED in my working tree.
+audits) has 7 tabs, all built and browser-verified: Weakness Review, Claim
+Audit, Novelty Scan, Venue Fit, Numbers Check, Citation Gaps, and Overlap
+Check. Tabs 1-6 are committed (through 90f783b). The 7th (Overlap Check — the
+plagiarism check) is verified and UNCOMMITTED in my working tree.
 
 Before doing anything, two things I need from you:
 
 1. There is a real open decision documented in section 6 of that file: my own
-   stated priority was "deploy first, then research, don't interleave", but six
-   feature builds have happened instead of finishing the deploy. Surface that
-   decision to me and let me choose the track. Do NOT silently pick one.
+   stated priority was "deploy first, then research, don't interleave", but
+   seven feature builds have happened instead of finishing the deploy. Surface
+   that decision to me and let me choose the track. Do NOT silently pick one.
 
 2. Tell me exactly what's sitting uncommitted and what you'd suggest the commit
    split should be. I do all git commits myself — never run git commit, and
@@ -43,9 +43,10 @@ sections 3 and 7 of the handoff):
   EXISTS inside each module's _ensure_schema(), run at import time.
 - Run the backend WITHOUT --reload (known stale-process bug on this machine —
   two processes end up bound to :8000). Kill and restart manually.
-- Chrome automation: screenshot resolution != real viewport (~1.96x off), so
-  pixel-coordinate clicks land wrong. Use read_page(filter: interactive) to get
-  element refs and click by ref.
+- Chrome automation: screenshot resolution != real viewport, so pixel-coordinate
+  clicks land wrong. read_page refs usually work, but they silently stopped
+  registering mid-session on 2026-08-06 (clicks returned OK, nothing navigated).
+  The reliable fallback is javascript_tool clicking by button text.
 
 Don't touch the deploy/hardening track (final_day.md, product/DEPLOYMENT.md,
 product/LAUNCH_CHECKLIST.md) unless I pick that track.
@@ -62,27 +63,28 @@ product/LAUNCH_CHECKLIST.md) unless I pick that track.
 | 3. Novelty Scan | `ingestion/novelty_scout.py` | Semantic Scholar | ✅ | ✅ 2026-07-25 |
 | 4. Venue Fit | `ingestion/structure_auditor.py` | — | ✅ | ✅ 2026-07-23 |
 | 5. Numbers Check | `ingestion/numbers_auditor.py` | — | ✅ | ✅ 2026-07-23 |
-| 6. Citation Gaps | `ingestion/citation_gap_auditor.py` | Semantic Scholar | ❌ **uncommitted** | ✅ 2026-07-25 |
+| 6. Citation Gaps | `ingestion/citation_gap_auditor.py` | Semantic Scholar | ✅ `90f783b` | ✅ 2026-07-25 |
+| 7. Overlap Check | `ingestion/plagiarism_auditor.py` | — | ❌ **uncommitted** | ✅ 2026-08-06 |
 
 **Commits already on `main`:** `2dfd9e4` (My Drafts + tabs 1–2), `bbafa63` (tabs 3–5 + landing/home redesign), `14b53cf` (numbers_auditor false-positive fix).
 
 **Uncommitted working tree right now:**
 
 ```
-?? ingestion/citation_gap_auditor.py            <- new, feature 6
-?? frontend/src/components/CitationGapPanel.jsx <- new, feature 6
- M api/main.py                                  <- feature 6 endpoint + imports
- M api/storage.py                               <- feature 6 R2 helpers
- M frontend/src/api.js                          <- citationGapStream()
- M frontend/src/components/MetricRing.jsx       <- rose accent
- M frontend/src/pages/DraftReviewPage.jsx       <- 6th tab
+?? ingestion/plagiarism_auditor.py              <- new, feature 7
+?? frontend/src/components/OverlapPanel.jsx     <- new, feature 7
+?? tests/test_plagiarism_auditor.py             <- new, 14 tests
+ M api/main.py                                  <- feature 7 endpoint + corpus lookup + imports
+ M api/storage.py                               <- feature 7 R2 helpers
+ M frontend/src/api.js                          <- overlapStream()
+ M frontend/src/components/MetricRing.jsx       <- blue accent
+ M frontend/src/pages/DraftReviewPage.jsx       <- 7th tab
+ M docs/dev/to_do.md                            <- §2c marked built
  M write_mode_handoff.md                        <- this file
- M ingestion/embedder_worker.py                 <- NOT MINE, see below
 ```
 
-`ingestion/embedder_worker.py` is a **stray whitespace-only change** (2 blank lines added) that predates this work. It's unrelated to Write Mode — discard it or commit it separately, don't bundle it.
-
-**Suggested commit split:** everything except `embedder_worker.py` is one coherent "Citation Gap Check" commit.
+**Suggested commit split:** one coherent "Overlap Check" commit — the engine,
+its tests, the endpoint/storage wiring, the panel, and both doc updates.
 
 ---
 
@@ -157,12 +159,13 @@ Non-negotiable pieces:
 | `numbers_auditor` | `MISMATCH` without both a cited chunk and a `found_value` → `NOT_FOUND`; numerically-equal claimed/found → `MATCH` |
 | `structure_auditor` | `MISSING` when a matching section exists → `THIN` |
 | `citation_gap_auditor` | marker in the *next* sentence → OK; first-person contribution → OK; flag with no reason → OK; unknown verdict → OK |
+| `plagiarism_auditor` | citation/quote the author wrote *around* the match → `ATTRIBUTED`; string in 3+ corpus papers → dropped; <6 distinct content words → dropped; source covering ≥45% of the draft → same document, excluded |
 
-If you add a 7th tab, it needs its own downgrade path. Don't ship one without it.
+If you add an 8th tab, it needs its own downgrade path. Don't ship one without it.
 
 ---
 
-## 4. The six tabs — reference
+## 4. The seven tabs — reference
 
 ### Tab 1 — Weakness Review (`reviewer_auditor.py`, accent violet `#a78bfa`)
 Grades the draft against methodological norms a reviewer would check (baselines, ablations, error bars, N, threats to validity, related work). Coverage-first: section map + per-component `hybrid_retrieve`.
@@ -216,6 +219,114 @@ Mirror image of the Claim Audit. Claim Audit asks "does the draft's own evidence
 
 **Caveat on output quality:** the only draft in My Drafts is a published, heavily-cited paper — a good *negative* control (97% sourced, one legitimate flag), but not a real test of a sparsely-cited draft. **Worth running against an actual early-stage draft before fully trusting the flag rate.**
 
+### Tab 7 — Overlap Check (`plagiarism_auditor.py`, accent blue `#60a5fa`) — NEW, uncommitted
+
+The "plagiarism check" from `docs/dev/to_do.md` §2c, built as a write-mode tab.
+
+**What it honestly is.** Not a Turnitin replacement — real plagiarism detection
+needs a web-scale index no free stack can build, and the panel says so in as many
+words. What it *is*: a check against the corpus where accidental reuse actually
+comes from — the papers the author uploaded and has been drafting from. We have
+their full text, so overlap here is provable rather than inferred.
+
+**Two signals, deliberately ranked.**
+1. *Shingles (primary).* Word 8-grams over the corpus, hits extended greedily into
+   the longest identical run. A shingle match is evidence — the exact shared
+   string is shown, from both sides. Zero interpretation.
+2. *Embeddings (secondary).* Verbatim matching is blind to paraphrase, so a
+   bounded pass compares uncovered passages by true cosine. **Cosine alone was
+   rejected as the primary signal**: two papers on one topic score ~0.85 without
+   sharing a sentence, so cosine-as-verdict reports topical similarity as
+   plagiarism. A pair is shown only after one LLM call confirms `SAME_CONTENT`
+   over `SAME_TOPIC`, always at low severity.
+
+**Design calls worth knowing:**
+
+- **The engine takes its corpus as an argument** (`audit_overlap(paper_id, corpus)`).
+  This is the only audit whose inputs include *other* papers, and resolving them
+  from Postgres inside the engine would have broken the "audit engines take only a
+  paper_id" rule that made write mode cheap. The endpoint's `_overlap_corpus()`
+  does the lookup, which also puts the tenancy boundary in one place: a user is
+  only ever compared against papers they can already read (own library + demo set).
+- **A copied citation is not attribution.** The first cut downgraded any match
+  whose surrounding text held a citation marker. On real data that waved through a
+  136-word pasted related-work paragraph, because the pasted text carried the
+  source's own `[16]`, `[18]` markers with it. `_Doc.context()` now returns the
+  text around the match and the match itself *separately*, and only markers the
+  author wrote around the passage count as credit. Quotation marks still count
+  anywhere. This is the sharpest rule in the module — see the test named for it.
+- **Same-document guard.** A user with both their draft and its published version
+  in the library would otherwise be told their own paper is 90% plagiarised. Any
+  source covering ≥45% of the draft is reported as an exclusion, not as findings.
+- **References and tables are excluded on both sides.** Two papers in a field
+  share reference lists verbatim and share benchmark tables. The abstract stays IN
+  (opposite of the citation-gap tab) — reused text there is exactly the target.
+- **`overlap_score` counts only unattributed runs.** Quoted and cited reuse is
+  correctly-done scholarship; counting it against the author punishes the
+  behaviour we want. The ring shows `originality = 1 - overlap`.
+- **Cache staleness is unique here.** Adding a paper to the library changes the
+  right answer without the draft changing. Still cached (expensive check, corpus
+  rarely moves mid-session); the re-run button is the escape hatch. Noted in
+  `api/storage.py` above the helpers.
+
+**⚠️ Every retriever/model import in this module is lazy.** It is the first write-
+mode engine to need `ingestion.models` (embeddings), and importing it eagerly made
+`pytest tests/` segfault at collection — `test_plagiarism_auditor` pulls torch,
+`test_table_extractor` pulls docling, same process, dead interpreter. Deferring the
+imports into the functions that need them fixed it and cut the suite from 12.2s to
+4.2s. Do not hoist them back to the top.
+
+**Verification done:**
+- `tests/test_plagiarism_auditor.py` — 14 tests on the deterministic layer (match +
+  both excerpts, severity tiers, the three attribution cases, boilerplate/stopword/
+  same-document guards, section filtering). Full suite **93 passed**, no segfault.
+- `import api.main` clean, route registered as `POST /papers/{id}/overlap/stream`;
+  `npm run build` clean.
+- **Real Chroma data**, 18 genuinely unrelated papers vs one draft: 7,439 words
+  scanned in 17.4s, **zero matches** — the negative control that matters most.
+- **Real positive control**: draft vs an identical copy of itself in the library →
+  detected, then correctly suppressed as the same document. A real 136-word
+  paragraph pasted from one indexed paper into another → caught, both sides quoted,
+  source section/page correct, and `ATTRIBUTED` only when the author's own citation
+  or quotation marks were added around it.
+
+**Browser-verified 2026-08-06**, and it was worth doing — the click-through found
+two bugs nothing else had (both now fixed, both with named regression tests):
+
+1. *Duplicates hid behind each other.* The library held **three** copies of the
+   draft, but only one was excluded. The guard measured coverage from the finished
+   match list, and the matcher is greedy — copy #1 absorbed all the coverage, so
+   copies #2 and #3 scored ~0 and survived. They came back as eight "possible
+   rewrite" cards of byte-identical text: *your paper is a reworded version of your
+   paper.* `split_same_documents` now runs before indexing and scores each source
+   independently.
+2. *The same duplicates would have silenced the tool entirely.* Three identical
+   copies in the index trip `COMMON_SOURCE_LIMIT`, so every genuine match would
+   have been discarded as "standard field phrasing" — a permanently clean report
+   for any user with duplicates in their library. Splitting them out first fixes
+   both symptoms at once.
+
+**Positive control** (a throwaway draft, since uploaded and deleted): original prose
+plus two paragraphs lifted from the RAG paper in the library — one pasted bare, one
+quoted with a citation. Result: 93% original, the bare paste in the main list as
+NEAR-VERBATIM against "Retrieval-Augmented Generation for" (source section *2.4
+Training · p.3*), the quoted paste under **Already attributed** as QUOTED/CITED.
+Evidence button opened the draft PDF at the right page with the passage highlighted.
+Cached re-serve showed the badge; backend logged only 200s; console clean.
+
+To reproduce, note the quota overrides needed — the owner's account is over the free
+paper cap, so `PAPERMIND_FREE_MAX_PAPERS` must be raised too, not just the audit
+limit (see §5).
+
+**Known limits, stated for the next session:**
+- Only catches reuse from papers *in the library*. Empty library = empty check
+  (the panel says so, and the shared demo papers are included so a new account
+  still sees something).
+- 8-word shingles miss reuse that reworded every sentence; that is what the
+  paraphrase tier is for, and it is deliberately narrow.
+- `MAX_CORPUS_PAPERS = 25`. Beyond that, the corpus is truncated newest-first
+  rather than sampled — fine now, worth revisiting if libraries get large.
+
 ---
 
 ## 5. Known-good local dev runbook
@@ -257,7 +368,7 @@ The three candidate tracks:
 
 ### Concrete leftovers regardless of track
 
-- **Commit the Citation Gap work** (§1 has the file list and suggested split). Owner does all commits.
+- **Commit the Overlap Check work** (§1 has the file list). Owner does all commits.
 - **`SEMANTIC_SCHOLAR_API_KEY` must be added to HF Space production secrets at deploy time.** It's in local `.env` and working, but two tabs (Novelty Scan, Citation Gaps) degrade to an empty state without it in prod. Manual, owner's-end, at deploy time — per `project_launch_checklist_deployment` env tables.
 - **Test Citation Gaps against a genuinely sparsely-cited draft** (see caveat in §4).
 
@@ -301,18 +412,20 @@ ingestion/
   novelty_scout.py          tab 3   (sync S2 client lives here)
   structure_auditor.py      tab 4   (+ list_venues())
   numbers_auditor.py        tab 5   (+ _numeric_value() guard)
-  citation_gap_auditor.py   tab 6   NEW, uncommitted
+  citation_gap_auditor.py   tab 6
+  plagiarism_auditor.py     tab 7   NEW, uncommitted (all imports lazy, see §7)
 api/
-  main.py                   6 SSE endpoints + GET /venues + delete-cleanup loop
-  storage.py                paper_type column + 6 x (upload/get/delete)_*_report
+  main.py                   7 SSE endpoints + GET /venues + delete-cleanup loop
+  storage.py                paper_type column + 7 x (upload/get/delete)_*_report
   usage.py                  TIER_LIMITS (all env-overridable), enforce_audit_quota
 frontend/src/
-  api.js                    6 *Stream() fns + getVenues()
+  api.js                    7 *Stream() fns + getVenues()
   pages/DraftsPage.jsx      "My Drafts" list + upload
-  pages/DraftReviewPage.jsx 6-tab switcher
+  pages/DraftReviewPage.jsx 7-tab switcher
   components/
     ReviewPanel.jsx  AuditPanel.jsx  NoveltyPanel.jsx
-    StructurePanel.jsx  NumbersPanel.jsx  CitationGapPanel.jsx   <- new
-    MetricRing.jsx          accents: cyan/violet/amber/emerald/rose
+    StructurePanel.jsx  NumbersPanel.jsx  CitationGapPanel.jsx
+    OverlapPanel.jsx        <- new
+    MetricRing.jsx          accents: cyan/violet/amber/emerald/rose/blue
     PDFPreviewPanel.jsx     shared evidence viewer (page + highlight)
 ```
