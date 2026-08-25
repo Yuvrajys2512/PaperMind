@@ -10,9 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install deps first so this layer caches across code-only changes.
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install from the pinned lock file, not requirements.txt directly — a
+# rebuild months from now must resolve to the exact same versions instead of
+# whatever `>=` picks up that day (Launch Checklist 1.5). Regenerate
+# requirements.lock (see its header) whenever requirements.txt changes.
+COPY requirements.lock .
+RUN pip install --no-cache-dir -r requirements.lock
 
 # Bake the two models the hot path loads, so the first request after a deploy
 # doesn't wait ~30s downloading weights from Hugging Face. These MUST match

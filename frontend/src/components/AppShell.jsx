@@ -20,7 +20,7 @@ const ICONS = {
    screens, a slim icon-only top bar below md. Pure CSS breakpoint swap —
    no JS width measurement, no drawer/open-close state. Backdrop stays a
    page-level concern; this component owns nav only. */
-/* Free-tier quota readout.
+/* Quota readout, shown for any tier that carries a real papers_limit.
 
    This exists because the sidebar used to contradict the server: the Library
    badge counted the user's papers PLUS the shared samples, while the quota
@@ -30,11 +30,14 @@ const ICONS = {
    number the server actually enforces, with drafts called out because they
    live on a different page and are otherwise invisible here.
 
-   Hidden entirely on unlimited tiers — `papers_limit` is null for pro. */
+   Hidden only when the tier is genuinely uncapped — `papers_limit` is null
+   for an unknown/future tier that fails open (see api/usage.py:_limits_for).
+   Both 'free' and 'pro' carry a real (if generous, for pro) limit as of
+   Launch Checklist 2.10. */
 function QuotaStrip({ usage }) {
   if (!usage || usage.papers_limit == null) return null
 
-  const { papers_used: used, papers_limit: limit, drafts_used: drafts = 0 } = usage
+  const { papers_used: used, papers_limit: limit, drafts_used: drafts = 0, tier } = usage
   const atLimit = used >= limit
   const color = atLimit ? 'rgba(248,113,113,0.9)' : 'rgba(229,231,235,0.5)'
 
@@ -48,7 +51,7 @@ function QuotaStrip({ usage }) {
     >
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[10px] uppercase tracking-[0.16em] text-gray-600 font-bold" style={{ fontFamily: 'var(--font-mono)' }}>
-          Free plan
+          {tier === 'pro' ? 'Pro plan' : 'Free plan'}
         </span>
         <span className="text-[11px] font-semibold" style={{ color, fontFamily: 'var(--font-mono)' }}>
           {used}/{limit}

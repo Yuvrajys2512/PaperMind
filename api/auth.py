@@ -6,6 +6,7 @@ import httpx
 import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, Header, HTTPException, Request
+from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 load_dotenv()
@@ -193,6 +194,17 @@ def rate_limit_key(request: Request) -> str:
             return f"user:{user_id}"
     # Namespaced so a spoofable IP key can never collide with a real user id.
     return f"ip:{get_remote_address(request)}"
+
+
+# One shared Limiter instance for the whole app. Defined here (not in
+# api/main.py) so discovery/router.py — which api/main.py imports before it
+# gets around to constructing anything — can add its own per-route limits
+# without an import cycle back to api.main.
+#
+# 120/min was chosen when this was (nominally) per-IP. Now that it is
+# genuinely per-user it applies to one person's burst — an SSE audit plus the
+# drafts page's 3s polling fits, but raise it if real usage says otherwise.
+limiter = Limiter(key_func=rate_limit_key, default_limits=["120/minute"])
 
 
 def require_admin(user_id: str = Depends(get_current_user_id)) -> str:

@@ -127,21 +127,31 @@ def log_operation(
         print(f"[logger] failed to write operation log: {exc}")
 
     # Report errors to Sentry with context.
+    #
+    # This used to call `sentry_sdk.with_scope(lambda scope: ...)`, which does
+    # not exist in sentry-sdk 2.x (it was removed in favour of `new_scope`).
+    # Every call raised AttributeError straight into the `except Exception:
+    # pass` below, so NOTHING was ever reported — and because almost every
+    # failure in the app is caught and routed through log_operation, that meant
+    # Sentry was effectively dead while still looking configured.
     if status == "error" and error and os.getenv("SENTRY_DSN"):
         try:
-            sentry_sdk.with_scope(
-                lambda scope: (
-                    scope.set_context("operation", {
-                        "operation": operation,
-                        "req_id": req_id,
-                        "user_id": user_id,
-                        "duration_ms": duration_ms,
-                        **context,
-                    }),
+            with sentry_sdk.new_scope() as scope:
+                scope.set_context("operation", {
+                    "operation": operation,
+                    "req_id": req_id,
+                    "user_id": user_id,
+                    "duration_ms": duration_ms,
+                    **context,
+                })
+                scope.set_tag("operation", operation)
+                if req_id:
+                    scope.set_tag("request_id", req_id)
+                if isinstance(error, Exception):
                     sentry_sdk.capture_exception(error)
-                    if isinstance(error, Exception)
-                    else sentry_sdk.capture_message(error_str, level="error"),
-                )
-            )
-        except Exception:
-            pass  # Sentry capture must never crash the app.
+                else:
+                    sentry_sdk.capture_message(error_str, level="error")
+        except Exception as exc:
+            # Must never crash the app — but must not be silent either, or the
+            # next breakage here is invisible for another two months.
+            print(f"[logger] Sentry capture failed: {type(exc).__name__}: {exc}")

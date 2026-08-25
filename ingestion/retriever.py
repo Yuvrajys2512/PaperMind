@@ -1,13 +1,15 @@
-import chromadb
-
 # ingestion.models pulls in sentence-transformers/torch, and importing torch in
 # the same process as docling segfaults on Windows (write_mode_handoff.md §7).
 # Only retrieve() needs the embedder — get_all_chunks/collection_name are pure
 # store access — so the import is deferred into the one function that uses it.
 # Keeping it at module scope meant merely importing this module dragged torch
 # in, which is what made `pytest tests/` die at collection.
-
-client = chromadb.PersistentClient(path="data/chroma_db")
+#
+# The Chroma client itself comes from api.concurrency.get_chroma_client() (the
+# single shared instance — see Launch Checklist 2.9) rather than a
+# module-level client here, so every reader and the delete path share one
+# client against one configurable path.
+from api.concurrency import get_chroma_client
 
 
 def collection_name(paper_name: str) -> str:
@@ -22,7 +24,7 @@ def collection_name(paper_name: str) -> str:
 def collection_exists(paper_name: str) -> bool:
     """True if this paper already has a Chroma collection on disk."""
     name = collection_name(paper_name)
-    return any(c.name == name for c in client.list_collections())
+    return any(c.name == name for c in get_chroma_client().list_collections())
 
 
 def retrieve(query: str, paper_name: str, top_k: int = 5) -> list:
@@ -30,7 +32,7 @@ def retrieve(query: str, paper_name: str, top_k: int = 5) -> list:
 
     clean_name = collection_name(paper_name)
 
-    collection = client.get_collection(name=clean_name)
+    collection = get_chroma_client().get_collection(name=clean_name)
 
     # BGE expects the query instruction prefix; `embed_query` adds it.
     query_embedding = embed_query(query).tolist()
@@ -100,7 +102,7 @@ def get_all_chunks(paper_name: str) -> list:
     every chunk and the sort was a no-op — callers were served Chroma's own
     ordering, which matched the document only by luck.
     """
-    collection = client.get_collection(name=collection_name(paper_name))
+    collection = get_chroma_client().get_collection(name=collection_name(paper_name))
     got = collection.get(include=["documents", "metadatas"])
 
     chunks = []

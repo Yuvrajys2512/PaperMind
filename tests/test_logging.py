@@ -117,3 +117,99 @@ if __name__ == "__main__":
     test_log_operation_error()
     test_log_query()
     print("\nAll tests passed!")
+
+
+# ── Sentry reporting ─────────────────────────────────────────────────────────
+# log_operation's Sentry branch is wrapped in a broad `except Exception` so a
+# reporting failure can never take down a request. That safety net also hid a
+# real bug for two months: the code called `sentry_sdk.with_scope(...)`, which
+# does not exist in sentry-sdk 2.x, so EVERY capture raised AttributeError and
+# was swallowed — Sentry looked configured and reported nothing.
+#
+# These tests pin the behaviour the safety net can otherwise hide: with a DSN
+# set, an error must actually reach capture_exception/capture_message.
+
+def _sentry_probe(monkeypatch):
+    """Point log_operation's Sentry calls at recording stubs. Returns the list
+    that captures land in."""
+    from api import logger as logger_mod
+
+    captured = []
+
+    class _Scope:
+        def set_context(self, *_args, **_kwargs):
+            pass
+
+        def set_tag(self, *_args, **_kwargs):
+            pass
+
+    class _NewScope:
+        def __enter__(self):
+            return _Scope()
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setenv("SENTRY_DSN", "https://example@sentry.invalid/1")
+    monkeypatch.setattr(logger_mod.sentry_sdk, "new_scope", lambda: _NewScope())
+    monkeypatch.setattr(
+        logger_mod.sentry_sdk, "capture_exception",
+        lambda exc: captured.append(("exception", exc)),
+    )
+    monkeypatch.setattr(
+        logger_mod.sentry_sdk, "capture_message",
+        lambda msg, level=None: captured.append(("message", msg)),
+    )
+    return captured
+
+
+def test_error_with_exception_reaches_sentry(monkeypatch):
+    captured = _sentry_probe(monkeypatch)
+    boom = ValueError("boom")
+
+    log_operation("test_op", "error", req_id="abc123", error=boom)
+
+    assert captured == [("exception", boom)], (
+        "an Exception passed to log_operation must reach capture_exception"
+    )
+
+
+def test_error_with_string_reaches_sentry(monkeypatch):
+    captured = _sentry_probe(monkeypatch)
+
+    log_operation("test_op", "error", error="timeout")
+
+    assert captured == [("message", "timeout")], (
+        "a string error must reach capture_message"
+    )
+
+
+def test_success_is_not_reported_to_sentry(monkeypatch):
+    captured = _sentry_probe(monkeypatch)
+
+    log_operation("test_op", "success", duration_ms=5)
+
+    assert captured == [], "successful operations must not be sent to Sentry"
+
+
+def test_no_dsn_means_no_capture(monkeypatch):
+    captured = _sentry_probe(monkeypatch)
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+
+    log_operation("test_op", "error", error=ValueError("boom"))
+
+    assert captured == [], "without SENTRY_DSN, nothing should be captured"
+
+
+def test_sentry_failure_never_propagates(monkeypatch):
+    """The safety net still has to work — a broken Sentry must not 500 a request."""
+    from api import logger as logger_mod
+
+    monkeypatch.setenv("SENTRY_DSN", "https://example@sentry.invalid/1")
+
+    def _explode():
+        raise RuntimeError("sentry is down")
+
+    monkeypatch.setattr(logger_mod.sentry_sdk, "new_scope", _explode)
+
+    log_operation("test_op", "error", error=ValueError("boom"))  # must not raise

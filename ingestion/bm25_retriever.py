@@ -1,5 +1,6 @@
 from rank_bm25 import BM25Okapi
-import chromadb
+
+from api.concurrency import get_chroma_client
 
 _bm25_cache: dict[str, tuple] = {}  # paper_name -> (BM25Okapi, chunks)
 
@@ -21,8 +22,7 @@ def build_bm25_index(paper_name: str):
         for c in paper_name
     ).strip("-").lower()
 
-    client = chromadb.PersistentClient(path="data/chroma_db")
-    collection = client.get_collection(name=clean_name)
+    collection = get_chroma_client().get_collection(name=clean_name)
 
     results = collection.get(include=["documents", "metadatas"])
 

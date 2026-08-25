@@ -16,12 +16,25 @@ jobs:
         with:
           python-version: "3.11"
 
-      # The tests/ suite is deliberately offline: chunking uses an injected fake
-      # tokenizer, the off-topic guard mocks its LLM call, and metrics are pure
-      # functions. So CI installs only these light deps (no torch / chromadb),
-      # keeping the job fast (~30s instead of minutes installing the ML stack).
+      # The tests/ suite is deliberately offline (no live Postgres/R2/Stripe —
+      # see 2.12): chunking uses an injected fake tokenizer, the off-topic
+      # guard mocks its LLM call, and metrics are pure functions. It does NOT
+      # avoid every real dependency though — collection alone imports
+      # api.auth, api.uploads, api.concurrency, discovery.fetcher, etc., which
+      # pull in fastapi/httpx/slowapi/pyjwt/chromadb/numpy/boto3/psycopg/
+      # sentry-sdk. This list previously only covered the original test
+      # files; new tests landing without a matching CI update is exactly
+      # what broke this the first time (2.7) — if `pytest -q` fails to
+      # *collect* here, the fix is almost always a missing import in this
+      # line, not a test bug. Torch/sentence-transformers are deliberately
+      # excluded: nothing in tests/ imports them, and pulling them in would
+      # turn a ~1min job into the same multi-GB CUDA download the Docker
+      # build takes.
       - name: Install test + lint deps
-        run: pip install pytest ruff tiktoken openai python-dotenv
+        run: >
+          pip install pytest ruff tiktoken openai python-dotenv
+          fastapi httpx slowapi "pyjwt[crypto]" chromadb numpy boto3
+          "psycopg[binary]" psycopg_pool "sentry-sdk[fastapi]" pdfplumber
 
       - name: Lint (ruff)
         run: ruff check .
@@ -49,6 +62,9 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Test
+        run: npm test
 
       - name: Build
         run: npm run build

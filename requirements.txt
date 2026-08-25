@@ -47,5 +47,9 @@ boto3>=1.35
 # Billing — Stripe Checkout, customer portal, subscription webhooks
 stripe>=11
 
+# Auth — Clerk account-deletion webhook signature verification (Clerk sends
+# webhooks via Svix)
+svix>=1.0
+
 # Error tracking (optional — no-op unless SENTRY_DSN is set)
 sentry-sdk[fastapi]>=2.0

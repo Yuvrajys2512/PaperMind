@@ -21,6 +21,9 @@ On unexpected errors (network, auth) the error is re-raised immediately.
 Public API
 ----------
 chat_completion(messages, max_tokens, temperature) -> str
+set_cancel_event(event | None)          associate a threading.Event with the
+                                         CURRENT thread's future chat_completion
+                                         calls (see OperationCancelled below)
 """
 
 from __future__ import annotations
@@ -37,6 +40,33 @@ load_dotenv()
 # The pipeline calls reset_stats() at the start of a query and get_stats()
 # at the end to surface llm_calls / providers_used / cost on the response.
 _stats_local = threading.local()
+
+# Per-thread cancellation flag, same isolation reasoning as _stats_local above.
+# api/concurrency.py's run_on_executor() sets this on the executor thread
+# running a request's pipeline work, and .set()s the Event if the caller's
+# asyncio.wait_for times out — so a timed-out audit/query stops making further
+# LLM calls instead of running to completion unbilled in the background (see
+# Launch Checklist 1.7: a `wait_for` timeout alone does not stop the thread).
+_cancel_local = threading.local()
+
+
+class OperationCancelled(Exception):
+    """Raised by chat_completion when the current thread's cancel Event has
+    been set. Pipeline code doesn't need to catch this specially — letting it
+    propagate up and fail the request is exactly the desired behavior."""
+
+
+def set_cancel_event(event: threading.Event | None) -> None:
+    """Associates a cancellation Event with the CURRENT thread's future
+    chat_completion calls, or clears it. Call at the start/end of the
+    executor-thread function running one request's pipeline work."""
+    _cancel_local.event = event
+
+
+def _raise_if_cancelled() -> None:
+    event = getattr(_cancel_local, "event", None)
+    if event is not None and event.is_set():
+        raise OperationCancelled("request cancelled (client timed out or disconnected)")
 
 
 def reset_stats() -> None:
@@ -239,15 +269,22 @@ def chat_completion(
     # time.sleep blocks the calling thread — fine for the eval CLI and bounded
     # for live requests (max ~sum(_BACKOFF_SCHEDULE)).
     for pass_idx in range(len(_BACKOFF_SCHEDULE) + 1):
+        _raise_if_cancelled()
         if pass_idx > 0:
             wait = _BACKOFF_SCHEDULE[pass_idx - 1]
             print(f"[llm_client] all providers rate-limited — backing off {wait}s "
                   f"(retry pass {pass_idx}/{len(_BACKOFF_SCHEDULE)})...")
-            time.sleep(wait)
+            event = getattr(_cancel_local, "event", None)
+            if event is not None:
+                event.wait(wait)  # wakes immediately on cancellation, unlike time.sleep
+            else:
+                time.sleep(wait)
+            _raise_if_cancelled()
 
         saw_retryable = False
 
         for provider in providers:
+            _raise_if_cancelled()
             try:
                 response = provider["client"].chat.completions.create(
                     model       = provider["model"],

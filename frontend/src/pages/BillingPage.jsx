@@ -104,7 +104,7 @@ export default function BillingPage({ onBack }) {
               {isPro ? (
                 <>
                   <p className="text-[13px] text-gray-400 mb-4">
-                    You're on <span className="text-white">Pro</span> — unlimited papers and queries.
+                    You're on <span className="text-white">Pro</span> — generous monthly limits, well above free.
                   </p>
                   <button onClick={handleAction} disabled={redirecting}
                     className="w-full py-2.5 rounded-xl text-sm font-medium text-white transition-colors disabled:opacity-50"
@@ -120,7 +120,7 @@ export default function BillingPage({ onBack }) {
                     <span className="text-sm text-gray-500">/ month</span>
                   </div>
                   <p className="text-[13px] text-gray-400 mb-4">
-                    Unlimited papers and queries. Cancel anytime.
+                    100 papers, 2,000 queries, 300 analyses per month. Cancel anytime.
                   </p>
                   <button onClick={handleAction} disabled={redirecting}
                     className="w-full py-2.5 rounded-xl text-sm font-semibold transition-opacity disabled:opacity-50"

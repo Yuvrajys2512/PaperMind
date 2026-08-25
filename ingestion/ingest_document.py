@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import platform
 import subprocess
 import tempfile
 from pathlib import Path
@@ -20,6 +21,21 @@ from ingestion.section_detector import (
 )
 from ingestion.chunker import chunk_sections
 from ingestion.table_extractor import tables_to_chunks
+
+# The subprocess only exists to work around a Windows-only DLL collision
+# between PyTorch and Groq/pdfplumber in the same process — see the module
+# docstring below. On Linux (production) there's no such collision, so we
+# skip the ~30s Python-startup + model-reload cost per upload and embed
+# in-process. `PAPERMIND_EMBED_IN_PROCESS=1`/`=0` overrides the platform
+# default either way (e.g. to force the subprocess path for debugging).
+_EMBED_IN_PROCESS_OVERRIDE = os.getenv("PAPERMIND_EMBED_IN_PROCESS")
+EMBEDDER_SUBPROCESS_TIMEOUT_SECONDS = 300
+
+
+def _should_embed_in_process() -> bool:
+    if _EMBED_IN_PROCESS_OVERRIDE is not None:
+        return _EMBED_IN_PROCESS_OVERRIDE == "1"
+    return platform.system() != "Windows"
 
 
 def ingest_document(pdf_path: str, paper_name: str) -> dict:
@@ -84,31 +100,48 @@ def ingest_document(pdf_path: str, paper_name: str) -> dict:
 
         # ── Step 5: Embed and store ────────────────────────────────────────
         print(f"[ingest] Embedding and storing into ChromaDB as '{paper_name}'...")
-        
-        # We run the embedder in a subprocess to prevent a silent native Windows DLL
-        # collision between PyTorch (SentenceTransformers) and Groq/pdfplumber
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
-            json.dump(chunks, f)
-            temp_path = f.name
-            
-        try:
-            worker_script = os.path.join(os.path.dirname(__file__), "embedder_worker.py")
-            result = subprocess.run(
-                [sys.executable, worker_script, temp_path, paper_name],
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            print(f"[ingest] Embedding process failed with exit code {e.returncode}")
-            print(f"[ingest] STDOUT: {e.stdout}")
-            print(f"[ingest] STDERR: {e.stderr}")
-            raise RuntimeError("Embedder subprocess failed") from e
-        finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                
+
+        if _should_embed_in_process():
+            # Lazy import: pulls in torch, which must never load in the same
+            # process as docling/ingestion_runner on Windows (see the
+            # subprocess path below) — safe here only because this branch is
+            # never taken on Windows.
+            from ingestion.embedder import embed_and_store
+            embed_and_store(chunks, paper_name)
+        else:
+            # Windows only: run the embedder in a subprocess to prevent a silent
+            # native DLL collision between PyTorch (SentenceTransformers) and
+            # Groq/pdfplumber. This holds `paper_locked(paper_id)` for as long as
+            # the subprocess runs, so a hung child must not deadlock the paper
+            # forever — hence the timeout.
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
+                json.dump(chunks, f)
+                temp_path = f.name
+
+            try:
+                worker_script = os.path.join(os.path.dirname(__file__), "embedder_worker.py")
+                result = subprocess.run(
+                    [sys.executable, worker_script, temp_path, paper_name],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=EMBEDDER_SUBPROCESS_TIMEOUT_SECONDS,
+                )
+                print(result.stdout)
+            except subprocess.TimeoutExpired as e:
+                print(f"[ingest] Embedding process timed out after {EMBEDDER_SUBPROCESS_TIMEOUT_SECONDS}s")
+                raise RuntimeError(
+                    f"Embedder subprocess timed out after {EMBEDDER_SUBPROCESS_TIMEOUT_SECONDS}s"
+                ) from e
+            except subprocess.CalledProcessError as e:
+                print(f"[ingest] Embedding process failed with exit code {e.returncode}")
+                print(f"[ingest] STDOUT: {e.stdout}")
+                print(f"[ingest] STDERR: {e.stderr}")
+                raise RuntimeError("Embedder subprocess failed") from e
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
         print("[ingest] Done.")
 
         return {

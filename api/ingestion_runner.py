@@ -3,9 +3,11 @@ import time
 
 from api.storage import (
     download_pdf_to_tempfile,
+    get_chroma_snapshot,
     get_paper,
     list_ready_paper_ids,
     update_paper_status,
+    upload_chroma_snapshot,
 )
 from api.usage import record_usage
 from api.logger import log_operation
@@ -42,6 +44,7 @@ def run_ingestion_from_storage(paper_id: str, kind: str = "upload"):
                     context={"paper_id": paper_id, "kind": kind},
                     duration_ms=round((time.monotonic() - t0) * 1000),
                 )
+                _snapshot_chroma_collection(paper_id)
             else:
                 update_paper_status(paper_id, "failed", error=result["error"])
                 log_operation(
@@ -74,7 +77,11 @@ def run_ingestion_from_storage(paper_id: str, kind: str = "upload"):
 
         stats = get_stats()
         paper = get_paper(paper_id)
-        if paper:
+        # A startup rebuild is server-side work, not something the user did —
+        # billing it to their account (kind='regenerate') would misattribute
+        # cost/usage to someone who took no action. Real uploads/re-imports
+        # still get recorded normally.
+        if paper and kind != "regenerate":
             record_usage(
                 user_id=paper["user_id"],
                 kind=kind,
@@ -86,12 +93,43 @@ def run_ingestion_from_storage(paper_id: str, kind: str = "upload"):
             )
 
 
+def _snapshot_chroma_collection(paper_id: str) -> None:
+    """Exports paper_id's freshly-built Chroma collection to R2 so a later
+    startup rebuild (see regenerate_missing_collections) can restore it
+    without re-running the LLM ingestion pipeline. Best-effort: an upload
+    failure here must not fail the ingestion that just succeeded — worst case,
+    the next rebuild falls back to a full re-ingest, same as before this
+    existed."""
+    from ingestion.chroma_snapshot import export_collection
+
+    try:
+        snapshot = export_collection(paper_id)
+        upload_chroma_snapshot(paper_id, snapshot)
+    except Exception as exc:
+        log_operation(
+            "upload_chroma_snapshot",
+            "error",
+            context={"paper_id": paper_id},
+            error=exc,
+        )
+
+
 def regenerate_missing_collections():
     """Rebuild any 'ready' paper whose Chroma collection is missing from local
     disk (e.g. after an ephemeral-disk host wiped data/chroma_db on redeploy).
+
+    Tries the R2 snapshot first (Launch Checklist 1.4): restoring one is a
+    handful of local Chroma writes with zero LLM/embedding-model calls, unlike
+    a full re-ingest (which re-runs LLM-backed section detection for every
+    paper on every redeploy). Only papers ingested before snapshotting shipped
+    — or whose snapshot upload never succeeded — fall back to the old full
+    re-ingest path.
+
     PDFs live in R2 and the registry in Neon, so the index is fully
-    regenerable. Idempotent: papers that already have a collection are skipped,
-    making this a near-instant no-op on a warm or persistent disk."""
+    regenerable either way. Idempotent: papers that already have a collection
+    are skipped, making this a near-instant no-op on a warm or persistent disk.
+    """
+    from ingestion.chroma_snapshot import restore_collection
     from ingestion.retriever import collection_exists
 
     ready = list_ready_paper_ids()
@@ -101,8 +139,23 @@ def regenerate_missing_collections():
         f"{len(missing)} missing collection(s) to rebuild."
     )
     for pid in missing:
+        snapshot = get_chroma_snapshot(pid)
+        if snapshot is not None:
+            try:
+                print(f"[regenerate] restoring {pid} from Chroma snapshot…")
+                restore_collection(pid, snapshot)
+                continue
+            except Exception as exc:
+                log_operation(
+                    "restore_chroma_snapshot",
+                    "error",
+                    context={"paper_id": pid},
+                    error=exc,
+                )
+                print(f"[regenerate] snapshot restore failed for {pid}, falling back to re-ingest: {exc}")
+
         try:
-            print(f"[regenerate] rebuilding {pid} from R2…")
+            print(f"[regenerate] rebuilding {pid} from R2 (no snapshot available)…")
             run_ingestion_from_storage(pid, kind="regenerate")
         except Exception as exc:
             log_operation(

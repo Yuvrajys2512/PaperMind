@@ -8,8 +8,11 @@
  * reconcile the two.
  *
  * The strip's whole job is showing the number the server actually enforces, so
- * the cases below pin: unlimited tiers show nothing, the drafts breakdown is
- * correct and correctly pluralised, and the at-limit state is visually distinct.
+ * the cases below pin: a genuinely uncapped tier (null papers_limit) shows
+ * nothing, pro shows its own real limit under a "Pro plan" label (Launch
+ * Checklist 2.10 gave pro a real ceiling instead of unlimited), the drafts
+ * breakdown is correct and correctly pluralised, and the at-limit state is
+ * visually distinct.
  */
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -19,15 +22,23 @@ import AppShell from './AppShell'
 const shell = (usage) =>
   render(<AppShell usage={usage} libraryBadge={2} onLibrary={() => {}} onDrafts={() => {}} />)
 
-describe('when the plan is unlimited', () => {
-  it('renders nothing for a pro user (papers_limit null)', () => {
-    shell({ tier: 'pro', papers_used: 40, papers_limit: null, drafts_used: 3 })
-    expect(screen.queryByText(/free plan/i)).not.toBeInTheDocument()
+describe('when the tier is genuinely uncapped', () => {
+  it('renders nothing when papers_limit is null (e.g. an unrecognized future tier)', () => {
+    shell({ tier: 'enterprise', papers_used: 40, papers_limit: null, drafts_used: 3 })
+    expect(screen.queryByText(/plan/i)).not.toBeInTheDocument()
   })
 
   it('renders nothing when usage has not loaded yet', () => {
     shell(null)
-    expect(screen.queryByText(/free plan/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/plan/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('pro plan counts', () => {
+  it('shows the "Pro plan" label with its own real limit, not "unlimited"', () => {
+    shell({ tier: 'pro', papers_used: 40, papers_limit: 100, drafts_used: 3 })
+    expect(screen.getByText(/pro plan/i)).toBeInTheDocument()
+    expect(screen.getByText('40/100')).toBeInTheDocument()
   })
 })
 

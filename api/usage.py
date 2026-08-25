@@ -42,11 +42,19 @@ TIER_LIMITS = {
         # the first run and forced re-runs count.
         "max_audits_per_month": int(os.getenv("PAPERMIND_FREE_MAX_AUDITS_PER_MONTH", "10")),
     },
-    # "pro" (set by §3/Stripe's webhook) is explicitly unlimited. `None` rides
-    # the same code path as an unknown tier in _limits_for, so a `users.tier`
-    # value that Stripe flips before this dict is ever extended still fails
-    # open (unlimited) rather than wrongly locking out a paying user.
-    "pro": None,
+    # "pro" (set by §3/Stripe's webhook) used to be explicitly unlimited
+    # (`None`) — one $9/mo subscriber could exhaust the shared free
+    # Groq/Gemini/Mistral quotas for every other user, including free ones.
+    # These are a high-but-real abuse ceiling, not a real-world usage cap —
+    # see Launch Checklist 2.10. `None` (unlimited) still rides the same code
+    # path for an unknown tier in _limits_for, so a `users.tier` value that
+    # predates this dict's shape still fails open rather than wrongly locking
+    # out a paying user.
+    "pro": {
+        "max_papers": int(os.getenv("PAPERMIND_PRO_MAX_PAPERS", "100")),
+        "max_queries_per_month": int(os.getenv("PAPERMIND_PRO_MAX_QUERIES_PER_MONTH", "2000")),
+        "max_audits_per_month": int(os.getenv("PAPERMIND_PRO_MAX_AUDITS_PER_MONTH", "300")),
+    },
 }
 
 
@@ -83,7 +91,10 @@ def _ensure_schema():
         )
 
 
-_ensure_schema()
+# Registered rather than run eagerly here — the shared _pool (from api.storage)
+# is lazy, so this only actually runs the first time anything really connects
+# to Postgres, not merely when api.usage is imported (Launch Checklist 2.12).
+_pool.on_first_open(_ensure_schema)
 
 
 def _limits_for(tier: str) -> dict | None:
@@ -113,6 +124,15 @@ def set_user_tier(user_id: str, tier: str) -> None:
             """,
             (user_id, tier),
         )
+
+
+def delete_user_usage(user_id: str) -> None:
+    """Deletes every usage_events row and the users row for user_id. Called by
+    the Clerk account-deletion webhook (api/main.py) as the last step of the
+    account-delete cascade, once every paper and billing record is gone."""
+    with _pool.connection() as conn:
+        conn.execute("DELETE FROM usage_events WHERE user_id = %s", (user_id,))
+        conn.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
 
 
 def _count_events_this_month(user_id: str, kind: str) -> int:
@@ -164,7 +184,8 @@ def record_usage(
 
 
 def enforce_paper_quota(user_id: str = Depends(get_current_user_id)) -> str:
-    limits = _limits_for(get_user_tier(user_id))
+    tier = get_user_tier(user_id)
+    limits = _limits_for(tier)
     if limits is None:
         return user_id
 
@@ -188,7 +209,7 @@ def enforce_paper_quota(user_id: str = Depends(get_current_user_id)) -> str:
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Free tier limit of {limits['max_papers']} reached — you have {breakdown}. "
+                f"{tier.capitalize()} tier limit of {limits['max_papers']} reached — you have {breakdown}. "
                 "Drafts count toward the same limit; the shared sample papers do not. "
                 "Delete a paper or a draft to upload a new one."
             ),
@@ -197,12 +218,13 @@ def enforce_paper_quota(user_id: str = Depends(get_current_user_id)) -> str:
 
 
 def enforce_query_quota(user_id: str = Depends(get_current_user_id)) -> str:
-    limits = _limits_for(get_user_tier(user_id))
+    tier = get_user_tier(user_id)
+    limits = _limits_for(tier)
     if limits is not None and count_queries_this_month(user_id) >= limits["max_queries_per_month"]:
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Free tier limit of {limits['max_queries_per_month']} queries/month reached. "
+                f"{tier.capitalize()} tier limit of {limits['max_queries_per_month']} queries/month reached. "
                 "Try again next month."
             ),
         )
@@ -212,12 +234,13 @@ def enforce_query_quota(user_id: str = Depends(get_current_user_id)) -> str:
 def enforce_audit_quota(user_id: str = Depends(get_current_user_id)) -> str:
     """Gate for the deep paper analyses (claim audit + weakness review). Separate
     from the Q&A query budget so a user running audits never burns query credit."""
-    limits = _limits_for(get_user_tier(user_id))
+    tier = get_user_tier(user_id)
+    limits = _limits_for(tier)
     if limits is not None and count_audits_this_month(user_id) >= limits["max_audits_per_month"]:
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Free tier limit of {limits['max_audits_per_month']} paper analyses/month "
+                f"{tier.capitalize()} tier limit of {limits['max_audits_per_month']} paper analyses/month "
                 "reached (claim audits and weakness reviews share this limit). "
                 "Try again next month."
             ),

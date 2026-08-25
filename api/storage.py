@@ -1,6 +1,8 @@
+import gzip
 import json
 import os
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -31,6 +33,49 @@ if not all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAM
         "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME must all be set."
     )
 
+class _LazyConnectionPool:
+    """Wraps psycopg_pool.ConnectionPool so the real TCP connection to
+    Postgres (and any schema DDL registered via on_first_open) happens on
+    the first actual `.connection()` call, not at import time.
+
+    Launch Checklist 2.12: importing api.storage used to open a live
+    connection to Neon immediately (`ConnectionPool(..., open=True)`) and
+    then run `_ensure_schema()` against it — so merely *collecting* a test
+    module that does `from api import storage` (pytest imports every test
+    module during collection, whether or not the test itself touches
+    Postgres) already talked to production. api/usage.py and api/billing.py
+    import this same `_pool` object and register their own schema via
+    `on_first_open` rather than running it eagerly at their own import time.
+    """
+
+    def __init__(self, conninfo: str, **kwargs):
+        self._real = ConnectionPool(conninfo, open=False, **kwargs)
+        self._setup_callbacks: list = []
+        self._ready = False
+        self._setup_lock = threading.Lock()
+
+    def on_first_open(self, callback) -> None:
+        """Registers a zero-arg callback (typically a module's
+        `_ensure_schema`) to run exactly once, the first time this pool
+        actually opens — never at import time."""
+        self._setup_callbacks.append(callback)
+
+    def _ensure_ready(self) -> None:
+        if self._ready:
+            return
+        with self._setup_lock:
+            if self._ready:
+                return
+            self._real.open()
+            for callback in self._setup_callbacks:
+                callback()
+            self._ready = True
+
+    def connection(self, *args, **kwargs):
+        self._ensure_ready()
+        return self._real.connection(*args, **kwargs)
+
+
 # The one connection pool for the whole app — api/usage.py and api/billing.py
 # import this object rather than opening their own.
 #
@@ -44,11 +89,10 @@ if not all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAM
 # was mistaken for a quota error the first time it showed up. `check_connection`
 # costs one `SELECT 1` per checkout and discards dead connections instead of
 # failing the request. `max_idle` recycles them before Neon gets the chance.
-_pool = ConnectionPool(
+_pool = _LazyConnectionPool(
     DATABASE_URL,
     min_size=1,
     max_size=5,
-    open=True,
     check=ConnectionPool.check_connection,
     max_idle=120,
 )
@@ -88,7 +132,7 @@ def _ensure_schema():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_user_type ON papers (user_id, paper_type)")
 
 
-_ensure_schema()
+_pool.on_first_open(_ensure_schema)
 
 
 # ── Registry (Neon Postgres) ─────────────────────────────────────────────────
@@ -241,6 +285,52 @@ def get_pdf_stream(paper_id: str):
 def delete_pdf(paper_id: str):
     """Deletes a paper's PDF from R2."""
     _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=f"{paper_id}.pdf")
+
+
+# ── Chroma collection snapshots (Cloudflare R2) ───────────────────────────────
+# On an ephemeral-disk host (HF Spaces free tier), data/chroma_db is wiped on
+# every redeploy. Without this, api/ingestion_runner.regenerate_missing_
+# collections had to fully re-run the LLM ingestion pipeline (section
+# detection is LLM-backed) for every ready paper of every user, on every
+# deploy — see Launch Checklist 1.4. A snapshot is the paper's already-computed
+# embeddings/documents/metadatas, gzipped; restoring it is a handful of local
+# Chroma writes with zero LLM/embedding-model calls.
+
+def _chroma_snapshot_key(paper_id: str) -> str:
+    return f"{paper_id}.chroma_snapshot.json.gz"
+
+
+def upload_chroma_snapshot(paper_id: str, snapshot: dict):
+    """Persist a paper's exported Chroma collection (see
+    ingestion/chroma_snapshot.py) as a gzipped JSON blob in R2."""
+    _s3.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=_chroma_snapshot_key(paper_id),
+        Body=gzip.compress(json.dumps(snapshot).encode("utf-8")),
+        ContentType="application/json",
+        ContentEncoding="gzip",
+    )
+
+
+def get_chroma_snapshot(paper_id: str) -> dict | None:
+    """Returns the paper's snapshot, or None if none exists / it's unreadable
+    (papers ingested before this feature shipped have no snapshot — the
+    caller falls back to a full re-ingest for those)."""
+    try:
+        obj = _s3.get_object(Bucket=R2_BUCKET_NAME, Key=_chroma_snapshot_key(paper_id))
+    except _s3.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        return None
+    try:
+        return json.loads(gzip.decompress(obj["Body"].read()).decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_chroma_snapshot(paper_id: str):
+    """Best-effort delete of a paper's Chroma snapshot."""
+    _s3.delete_object(Bucket=R2_BUCKET_NAME, Key=_chroma_snapshot_key(paper_id))
 
 
 # ── Claim-audit reports (Cloudflare R2) ───────────────────────────────────────

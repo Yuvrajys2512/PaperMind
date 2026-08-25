@@ -26,13 +26,14 @@ from ingestion.llm_client import get_stats, reset_stats
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from api.auth import get_current_user_id, require_admin, rate_limit_key
+from api.auth import get_current_user_id, require_admin, limiter
 from api.ingestion_runner import run_ingestion_from_storage, regenerate_missing_collections
+from ingestion.pdf_parser import count_pdf_pages, MAX_PDF_PAGES
 from api.logger import generate_request_id
-from api.concurrency import get_chroma_client, paper_locked
+from api.concurrency import get_chroma_client, paper_locked, release_paper_lock, run_on_executor, track_task
 from api.storage import (
     create_paper_record,
     update_paper_status,
@@ -65,6 +66,7 @@ from api.storage import (
     upload_overlap_report,
     get_overlap_report,
     delete_overlap_report,
+    delete_chroma_snapshot,
 )
 from api.usage import (
     enforce_paper_quota,
@@ -73,12 +75,15 @@ from api.usage import (
     get_aggregate_usage,
     get_usage_summary,
     record_usage,
+    delete_user_usage,
 )
+from api.content_disposition import content_disposition
 from api.uploads import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, PDF_MAGIC
 from api.logger import log_query
 from ingestion.bm25_retriever  import invalidate_bm25_cache
 from ingestion.retriever import collection_name
-from api.billing import router as billing_router
+from api.billing import router as billing_router, delete_customer_for_user
+from svix.webhooks import Webhook, WebhookVerificationError
 from discovery.router import router as discovery_router
 from discovery.search  import search_papers
 
@@ -102,6 +107,11 @@ if _sentry_dsn:
 # the Vite dev origin; set ALLOWED_ORIGINS to the real domain(s) in production.
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
 
+# Clerk account-deletion webhook. Guarded the same way as billing: absent
+# means the route 503s instead of the app crashing at import, so local dev
+# and pre-Clerk-webhook deploys stay runnable.
+CLERK_WEBHOOK_SECRET = os.getenv("CLERK_WEBHOOK_SECRET")
+
 # Caps on free-text LLM inputs. Without these a single request can carry
 # megabytes of text straight into the providers — blowing up token cost and
 # risking provider context-window errors. Override via env if a real workload
@@ -111,13 +121,9 @@ MAX_REWRITE_CHARS = int(os.getenv("PAPERMIND_MAX_REWRITE_CHARS", "8000"))
 
 # Rate limiting keyed per authenticated user, falling back to IP — see
 # api.auth.rate_limit_key for why keying on the client address alone was broken
-# behind a proxy.
-#
-# 120/min was chosen when this was (nominally) per-IP. Now that it is genuinely
-# per-user it applies to one person's burst — an SSE audit plus the drafts
-# page's 3s polling fits, but raise it if real usage says otherwise.
-limiter = Limiter(key_func=rate_limit_key, default_limits=["120/minute"])
-
+# behind a proxy. The Limiter instance itself lives in api.auth (not here) so
+# discovery/router.py can add its own per-route limits without an import
+# cycle back to api.main.
 app = FastAPI(
     title="PaperMind API",
     description="AI-powered research paper Q&A",
@@ -169,7 +175,67 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.post("/webhooks/clerk")
+async def clerk_webhook(request: Request):
+    """Handles Clerk's `user.deleted` event: cascades the delete across every
+    store this app owns, so a deleted Clerk account doesn't leave orphaned
+    data behind — required by our own Privacy Policy §5.
+
+    No Clerk session auth — Clerk calls this directly. Authenticity comes from
+    the Svix signature headers over the raw body (Clerk webhooks are sent via
+    Svix), verified below."""
+    if not CLERK_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Clerk webhook is not configured on this server.")
+
+    payload = await request.body()
+    try:
+        event = Webhook(CLERK_WEBHOOK_SECRET).verify(payload, dict(request.headers))
+    except WebhookVerificationError as exc:
+        log_operation(
+            "clerk_webhook",
+            "error",
+            error=exc,
+            context={"reason": "invalid_signature"},
+        )
+        raise HTTPException(status_code=400, detail="Invalid webhook signature.")
+
+    event_type = event.get("type")
+    if event_type != "user.deleted":
+        return {"received": True}
+
+    user_id = (event.get("data") or {}).get("id")
+    if not user_id:
+        return {"received": True}
+
+    # Deliberately not try/except-and-swallow like the Stripe webhook (2.1
+    # flags that pattern as a bug there). A failure here must surface as a
+    # non-2xx so Svix retries — the alternative is silently keeping a deleted
+    # user's data forever, which is the exact compliance gap this closes. Each
+    # per-paper/store delete below is already best-effort internally, so a
+    # retry after a partial failure is safe: it just re-deletes what's left.
+    papers = list_papers(user_id)
+    for paper in papers:
+        paper_id = paper["paper_id"]
+        with paper_locked(paper_id):
+            delete_pdf(paper_id)
+            delete_paper_record(paper_id)
+            _delete_paper_cascade(paper_id, user_id, req_id="clerk-webhook")
+        release_paper_lock(paper_id)
+
+    delete_customer_for_user(user_id)
+    delete_user_usage(user_id)
+
+    log_operation(
+        "clerk_user_deleted",
+        "success",
+        user_id=user_id,
+        context={"event_id": event.get("id"), "papers_deleted": len(papers)},
+    )
+    return {"received": True}
+
+
 @app.post("/upload")
+@limiter.limit("5/minute")
 async def upload_paper(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -222,6 +288,26 @@ async def upload_paper(
             context={"filename": file.filename},
         )
         raise HTTPException(status_code=400, detail="Could not read the uploaded file.")
+
+    try:
+        num_pages = count_pdf_pages(temp_path)
+    except Exception as exc:
+        os.remove(temp_path)
+        log_operation(
+            "upload_count_pages",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"filename": file.filename},
+        )
+        raise HTTPException(status_code=400, detail="Could not read the uploaded PDF.")
+    if num_pages > MAX_PDF_PAGES:
+        os.remove(temp_path)
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF has {num_pages} pages, exceeding the {MAX_PDF_PAGES}-page limit.",
+        )
 
     paper_id = create_paper_record(file.filename, user_id, paper_type=paper_type)
     try:
@@ -292,6 +378,71 @@ def get_admin_usage(admin_id: str = Depends(require_admin)):
     return get_aggregate_usage()
 
 
+def _delete_paper_cascade(paper_id: str, user_id: str, req_id: str = "unknown") -> None:
+    """Deletes the ChromaDB collection, BM25 cache entry, R2 Chroma snapshot,
+    and every cached audit report for one paper. Caller has already deleted
+    the R2 PDF and the registry row (kept separate so DELETE /papers/{id} can
+    turn a failure there into a 502/500, while an account-deletion cascade
+    should not stop
+    partway through a user's library over one bad blob). Must be called with
+    paper_locked(paper_id) held. Shared by DELETE /papers/{id} and the Clerk
+    account-deletion webhook (POST /webhooks/clerk)."""
+    # Drop ChromaDB collection using thread-safe client
+    try:
+        chroma = get_chroma_client()
+        chroma.delete_collection(name=collection_name(paper_id))
+    except Exception as exc:
+        # The collection may legitimately be missing (ingestion never
+        # completed) — log it so a real failure is still visible.
+        log_operation(
+            "delete_chroma_collection",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+        )
+
+    # Invalidate the BM25 cache so a re-ingest of the same paper_id
+    # doesn't serve stale tokens.
+    try:
+        invalidate_bm25_cache(paper_id)
+    except Exception as exc:
+        log_operation(
+            "invalidate_bm25_cache",
+            "error",
+            req_id=req_id,
+            user_id=user_id,
+            error=exc,
+            context={"paper_id": paper_id},
+        )
+
+    # Drop the cached claim-audit and reviewer-audit reports, if any.
+    # Best-effort — an orphaned blob is harmless, so a missing/failed delete
+    # must not block the rest.
+    for _drop, _op in (
+        (delete_audit_report, "delete_audit_report"),
+        (delete_review_report, "delete_review_report"),
+        (delete_novelty_report, "delete_novelty_report"),
+        (delete_structure_report, "delete_structure_report"),
+        (delete_numbers_report, "delete_numbers_report"),
+        (delete_citation_gap_report, "delete_citation_gap_report"),
+        (delete_overlap_report, "delete_overlap_report"),
+        (delete_chroma_snapshot, "delete_chroma_snapshot"),
+    ):
+        try:
+            _drop(paper_id)
+        except Exception as exc:
+            log_operation(
+                _op,
+                "error",
+                req_id=req_id,
+                user_id=user_id,
+                error=exc,
+                context={"paper_id": paper_id},
+            )
+
+
 @app.delete("/papers/{paper_id}")
 def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_current_user_id)):
     req_id = getattr(request.state, 'req_id', 'unknown')
@@ -333,59 +484,9 @@ def delete_paper(request: Request, paper_id: str, user_id: str = Depends(get_cur
             )
             raise HTTPException(status_code=500, detail="Failed to delete paper from registry.")
 
-        # Drop ChromaDB collection using thread-safe client
-        try:
-            chroma = get_chroma_client()
-            chroma.delete_collection(name=collection_name(paper_id))
-        except Exception as exc:
-            # The collection may legitimately be missing (ingestion never
-            # completed) — log it so a real failure is still visible.
-            log_operation(
-                "delete_chroma_collection",
-                "error",
-                req_id=req_id,
-                user_id=user_id,
-                error=exc,
-                context={"paper_id": paper_id},
-            )
+        _delete_paper_cascade(paper_id, user_id, req_id)
 
-        # Invalidate the BM25 cache so a re-ingest of the same paper_id
-        # doesn't serve stale tokens.
-        try:
-            invalidate_bm25_cache(paper_id)
-        except Exception as exc:
-            log_operation(
-                "invalidate_bm25_cache",
-                "error",
-                req_id=req_id,
-                user_id=user_id,
-                error=exc,
-                context={"paper_id": paper_id},
-            )
-
-        # Drop the cached claim-audit and reviewer-audit reports, if any.
-        # Best-effort — an orphaned blob is harmless, so a missing/failed delete
-        # must not block the rest.
-        for _drop, _op in (
-            (delete_audit_report, "delete_audit_report"),
-            (delete_review_report, "delete_review_report"),
-            (delete_novelty_report, "delete_novelty_report"),
-            (delete_structure_report, "delete_structure_report"),
-            (delete_numbers_report, "delete_numbers_report"),
-            (delete_citation_gap_report, "delete_citation_gap_report"),
-            (delete_overlap_report, "delete_overlap_report"),
-        ):
-            try:
-                _drop(paper_id)
-            except Exception as exc:
-                log_operation(
-                    _op,
-                    "error",
-                    req_id=req_id,
-                    user_id=user_id,
-                    error=exc,
-                    context={"paper_id": paper_id},
-                )
+    release_paper_lock(paper_id)
 
     log_operation(
         "delete_paper",
@@ -411,7 +512,10 @@ def serve_paper_pdf(paper_id: str, user_id: str = Depends(get_current_user_id)):
     return StreamingResponse(
         stream.iter_chunks(),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        # Never interpolate the filename raw — Starlette encodes headers as
+        # latin-1, so a CJK/Cyrillic name would raise UnicodeEncodeError and
+        # 500 this route. See api/content_disposition.py.
+        headers={"Content-Disposition": content_disposition(filename)},
     )
 
 
@@ -424,8 +528,6 @@ async def get_glossary(paper_id: str, user_id: str = Depends(enforce_query_quota
         raise HTTPException(status_code=404, detail="Paper not found.")
     if paper["status"] != "ready":
         raise HTTPException(status_code=400, detail="Paper not ready yet.")
-
-    loop = asyncio.get_running_loop()
 
     def _extract():
         from ingestion.retriever import retrieve
@@ -452,7 +554,7 @@ async def get_glossary(paper_id: str, user_id: str = Depends(enforce_query_quota
         return json.loads(raw.strip()), get_stats()
 
     try:
-        terms, stats = await asyncio.wait_for(loop.run_in_executor(None, _extract), timeout=40.0)
+        terms, stats = await run_on_executor(_extract, 40.0)
         record_usage(
             user_id=user_id,
             kind="query",
@@ -504,8 +606,6 @@ async def get_recommendations(paper_id: str, user_id: str = Depends(enforce_quer
     if paper["status"] != "ready":
         raise HTTPException(status_code=400, detail="Paper not ready yet.")
 
-    loop = asyncio.get_running_loop()
-
     def _get_queries():
         from ingestion.retriever import retrieve
         from ingestion.llm_client import chat_completion
@@ -529,7 +629,7 @@ async def get_recommendations(paper_id: str, user_id: str = Depends(enforce_quer
         return json.loads(raw.strip()), get_stats()
 
     try:
-        queries, stats = await asyncio.wait_for(loop.run_in_executor(None, _get_queries), timeout=20.0)
+        queries, stats = await run_on_executor(_get_queries, 20.0)
         record_usage(
             user_id=user_id,
             kind="query",
@@ -610,8 +710,6 @@ async def rewrite(request: RewriteRequest, user_id: str = Depends(enforce_query_
     if request.mode not in ("academic", "plain", "concise"):
         raise HTTPException(status_code=400, detail="mode must be academic, plain, or concise.")
 
-    loop = asyncio.get_running_loop()
-
     def _do_rewrite():
         # reset_stats / get_stats are thread-local and must run in the same
         # executor thread as the LLM call, so the token/cost numbers belong to
@@ -621,10 +719,7 @@ async def rewrite(request: RewriteRequest, user_id: str = Depends(enforce_query_
         return out, get_stats()
 
     try:
-        result, stats = await asyncio.wait_for(
-            loop.run_in_executor(None, _do_rewrite),
-            timeout=30.0,
-        )
+        result, stats = await run_on_executor(_do_rewrite, 30.0)
         record_usage(
             user_id=user_id,
             kind="query",
@@ -687,7 +782,6 @@ def _validate_question(question: str) -> None:
 @app.post("/query")
 async def query_paper(req: QueryRequest, user_id: str = Depends(enforce_query_quota)):
     req_id = generate_request_id()
-    loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
 
     _validate_question(req.question)
@@ -704,10 +798,7 @@ async def query_paper(req: QueryRequest, user_id: str = Depends(enforce_query_qu
                 raise HTTPException(status_code=400, detail=f"Paper {pid} is not ready yet.")
 
         try:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, compare_papers, req.question, paper_id_a, paper_id_b),
-                timeout=120.0,
-            )
+            result = await run_on_executor(compare_papers, 120.0, req.question, paper_id_a, paper_id_b)
         except asyncio.TimeoutError:
             log_operation(
                 "compare_papers",
@@ -776,10 +867,7 @@ async def query_paper(req: QueryRequest, user_id: str = Depends(enforce_query_qu
             return answer_query(req.question, paper_id)
 
     try:
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, _locked_query),
-            timeout=60.0,
-        )
+        result = await run_on_executor(_locked_query, 60.0)
     except asyncio.TimeoutError:
         log_operation(
             "answer_query",
@@ -840,7 +928,8 @@ async def query_paper(req: QueryRequest, user_id: str = Depends(enforce_query_qu
 #
 # Architecture:
 #   1. Client POSTs to /query/stream.
-#   2. We spawn the pipeline in run_in_executor (it's sync CPU/LLM work).
+#   2. We spawn the pipeline via api.concurrency.run_on_executor (it's sync
+#      CPU/LLM work, run on the app's dedicated, explicitly-sized pool).
 #   3. The executor passes a thread-safe on_progress callback that
 #      drops {stage, message, ...} dicts onto an asyncio.Queue.
 #   4. The SSE generator drains the queue, yielding each as a
@@ -850,6 +939,65 @@ async def query_paper(req: QueryRequest, user_id: str = Depends(enforce_query_qu
 def _sse_format(event_type: str, payload: dict) -> str:
     """Encode one Server-Sent Event frame."""
     return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _finalize_stream_work(
+    *,
+    report: dict,
+    stats: dict,
+    persist,
+    persist_op: str,
+    failed_key: str,
+    op: str,
+    user_id: str,
+    req_id: str,
+    paper_id: str,
+    duration_ms: int,
+    log_context: dict,
+) -> dict:
+    """Cache a finished report and bill its LLM usage. Returns the report.
+
+    **This must be called from the worker task, never from the SSE generator.**
+
+    It used to live in the generator's `done` branch, which looked equivalent
+    and was not. When a client disconnects mid-stream the generator is closed
+    and never reaches that branch — but the worker task keeps running to
+    completion. So an aborted audit burned the full LLM cost while recording no
+    usage and writing no cache.
+
+    That was also a quota bypass, not just waste: `enforce_audit_quota` counts
+    rows in `usage_events`, so "start an audit, abort it, repeat" gave
+    unlimited free-tier audits and unbounded provider spend. Keeping this on the
+    worker side means the accounting happens whether or not anyone is still
+    listening.
+    """
+    # A hard failure shouldn't be cached or billed — the user got nothing.
+    if not report.get(failed_key):
+        try:
+            persist(paper_id, report)
+        except Exception as exc:
+            log_operation(
+                persist_op, "error", req_id=req_id,
+                user_id=user_id, error=exc, context={"paper_id": paper_id},
+            )
+        record_usage(
+            user_id=user_id,
+            kind="audit",
+            req_id=req_id,
+            paper_id=paper_id,
+            llm_calls=stats["call_count"],
+            tokens_in=stats["tokens_in"],
+            tokens_out=stats["tokens_out"],
+            cost_usd=stats["cost_usd"],
+        )
+    log_operation(
+        op, "success", req_id=req_id, user_id=user_id,
+        context=log_context,
+        duration_ms=duration_ms,
+    )
+    report["request_id"] = req_id
+    report["cached"] = False
+    return report
 
 
 def _make_progress_pusher(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
@@ -865,7 +1013,8 @@ def _make_progress_pusher(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop)
 
 
 @app.post("/query/stream")
-async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_quota)):
+@limiter.limit("30/minute")
+async def query_stream(request: Request, req: QueryRequest, user_id: str = Depends(enforce_query_quota)):
     req_id = generate_request_id()
     loop   = asyncio.get_running_loop()
     t0     = time.monotonic()
@@ -921,9 +1070,34 @@ async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_q
                         )
                 timeout = 60.0
 
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, fn),
-                timeout=timeout,
+            result = await run_on_executor(fn, timeout)
+            # Log + bill here, on the worker, NOT in the SSE generator below.
+            # A client that disconnects mid-query closes the generator before
+            # its `done` branch ever runs, but this task still completes — so
+            # doing it there meant an abandoned query cost real tokens and
+            # recorded no usage, which `enforce_query_quota` counts. Same bug
+            # (and same fix) as _finalize_stream_work for the audits.
+            result["request_id"] = req_id
+            log_query(
+                req_id=req_id,
+                paper_id=log_paper_id,
+                question=req.question,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                confidence=result.get("confidence", 0),
+                attempts=result.get("attempts", 1),
+                passed=result.get("passed", False),
+                llm_calls=result.get("llm_calls", 0),
+                providers=result.get("providers_used", []),
+            )
+            record_usage(
+                user_id=user_id,
+                kind="query",
+                req_id=req_id,
+                paper_id=log_paper_id,
+                llm_calls=result.get("llm_calls", 0),
+                tokens_in=result.get("tokens_in", 0),
+                tokens_out=result.get("tokens_out", 0),
+                cost_usd=result.get("cost_usd", 0.0),
             )
             await queue.put(("done", result))
         except asyncio.TimeoutError:
@@ -935,6 +1109,17 @@ async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_q
                 error="timeout",
                 context={"paper_id": log_paper_id},
                 duration_ms=round((time.monotonic() - t0) * 1000),
+            )
+            # Log the failure as a FAIL so it shows up in queries.jsonl. On the
+            # worker, so an aborted stream still records the attempt.
+            log_query(
+                req_id=req_id,
+                paper_id=log_paper_id,
+                question=req.question,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                confidence=0,
+                attempts=0,
+                passed=False,
             )
             await queue.put(("error", {
                 "message": "Query timed out. The paper may be unusually large or the LLM providers slow.",
@@ -949,9 +1134,20 @@ async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_q
                 context={"paper_id": log_paper_id},
                 duration_ms=round((time.monotonic() - t0) * 1000),
             )
+            # Log the failure as a FAIL so it shows up in queries.jsonl. On the
+            # worker, so an aborted stream still records the attempt.
+            log_query(
+                req_id=req_id,
+                paper_id=log_paper_id,
+                question=req.question,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                confidence=0,
+                attempts=0,
+                passed=False,
+            )
             await queue.put(("error", {"message": f"Pipeline failed: {exc}"}))
 
-    asyncio.create_task(run_pipeline())
+    track_task(run_pipeline())
 
     async def event_stream():
         # First frame so the client knows the channel is open before any
@@ -966,44 +1162,16 @@ async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_q
                 continue
 
             if kind == "error":
+                # The FAIL row for queries.jsonl is written by run_pipeline,
+                # not here — a client that has already disconnected would
+                # otherwise leave the failure unlogged.
                 yield _sse_format("error", payload)
-                # Log the failure as a FAIL so it shows up in queries.jsonl
-                log_query(
-                    req_id=req_id,
-                    paper_id=log_paper_id,
-                    question=req.question,
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                    confidence=0,
-                    attempts=0,
-                    passed=False,
-                )
                 return
 
             if kind == "done":
-                result = payload
-                result["request_id"] = req_id
-                log_query(
-                    req_id=req_id,
-                    paper_id=log_paper_id,
-                    question=req.question,
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                    confidence=result.get("confidence", 0),
-                    attempts=result.get("attempts", 1),
-                    passed=result.get("passed", False),
-                    llm_calls=result.get("llm_calls", 0),
-                    providers=result.get("providers_used", []),
-                )
-                record_usage(
-                    user_id=user_id,
-                    kind="query",
-                    req_id=req_id,
-                    paper_id=log_paper_id,
-                    llm_calls=result.get("llm_calls", 0),
-                    tokens_in=result.get("tokens_in", 0),
-                    tokens_out=result.get("tokens_out", 0),
-                    cost_usd=result.get("cost_usd", 0.0),
-                )
-                yield _sse_format("done", result)
+                # Logging + usage accounting already happened in the worker
+                # (see run_pipeline) so an aborted stream cannot skip them.
+                yield _sse_format("done", payload)
                 return
 
     return StreamingResponse(
@@ -1025,6 +1193,7 @@ async def query_stream(req: QueryRequest, user_id: str = Depends(enforce_query_q
 # without LLM cost unless ?force=1 is passed.
 
 @app.post("/papers/{paper_id}/audit/stream")
+@limiter.limit("5/minute")
 async def audit_paper_stream(
     paper_id: str,
     request: Request,
@@ -1073,11 +1242,25 @@ async def audit_paper_stream(
                     report = audit_paper(paper_id, on_progress=on_progress)
                     return report, get_stats()
 
-            report, stats = await asyncio.wait_for(
-                loop.run_in_executor(None, fn),
-                timeout=180.0,
+            report, stats = await run_on_executor(fn, 180.0)
+            _finalize_stream_work(
+                report=report,
+                stats=stats,
+                persist=upload_audit_report,
+                persist_op="upload_audit_report",
+                failed_key="audit_failed",
+                op="audit_paper",
+                user_id=user_id,
+                req_id=req_id,
+                paper_id=paper_id,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                log_context={
+                    "paper_id": paper_id,
+                    "claims_checked": report.get("claims_checked", 0),
+                    "flagged": report.get("flagged", 0),
+                },
             )
-            await queue.put(("done", (report, stats)))
+            await queue.put(("done", report))
         except asyncio.TimeoutError:
             log_operation(
                 "audit_paper", "error", req_id=req_id, user_id=user_id,
@@ -1095,7 +1278,7 @@ async def audit_paper_stream(
             )
             await queue.put(("error", {"message": f"Audit failed: {exc}"}))
 
-    asyncio.create_task(run_audit())
+    track_task(run_audit())
 
     async def event_stream():
         yield _sse_format("open", {"req_id": req_id})
@@ -1112,39 +1295,10 @@ async def audit_paper_stream(
                 return
 
             if kind == "done":
-                report, stats = payload
-                # Only record usage + cache when the audit actually produced a
-                # report (a hard failure shouldn't be cached or billed).
-                if not report.get("audit_failed"):
-                    try:
-                        upload_audit_report(paper_id, report)
-                    except Exception as exc:
-                        log_operation(
-                            "upload_audit_report", "error", req_id=req_id,
-                            user_id=user_id, error=exc, context={"paper_id": paper_id},
-                        )
-                    record_usage(
-                        user_id=user_id,
-                        kind="audit",
-                        req_id=req_id,
-                        paper_id=paper_id,
-                        llm_calls=stats["call_count"],
-                        tokens_in=stats["tokens_in"],
-                        tokens_out=stats["tokens_out"],
-                        cost_usd=stats["cost_usd"],
-                    )
-                log_operation(
-                    "audit_paper", "success", req_id=req_id, user_id=user_id,
-                    context={
-                        "paper_id": paper_id,
-                        "claims_checked": report.get("claims_checked", 0),
-                        "flagged": report.get("flagged", 0),
-                    },
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                )
-                report["request_id"] = req_id
-                report["cached"] = False
-                yield _sse_format("done", report)
+                # Caching + usage accounting already happened in the
+                # worker (see _finalize_stream_work) so an aborted
+                # stream cannot skip them. Nothing to do but emit.
+                yield _sse_format("done", payload)
                 return
 
     return StreamingResponse(
@@ -1165,6 +1319,7 @@ async def audit_paper_stream(
 # pusher + SSE, R2-cached, re-served without LLM cost unless ?force=1 is passed.
 
 @app.post("/papers/{paper_id}/review/stream")
+@limiter.limit("5/minute")
 async def review_paper_stream(
     paper_id: str,
     request: Request,
@@ -1213,11 +1368,26 @@ async def review_paper_stream(
                     report = review_paper(paper_id, on_progress=on_progress)
                     return report, get_stats()
 
-            report, stats = await asyncio.wait_for(
-                loop.run_in_executor(None, fn),
-                timeout=180.0,
+            report, stats = await run_on_executor(fn, 180.0)
+            _finalize_stream_work(
+                report=report,
+                stats=stats,
+                persist=upload_review_report,
+                persist_op="upload_review_report",
+                failed_key="review_failed",
+                op="review_paper",
+                user_id=user_id,
+                req_id=req_id,
+                paper_id=paper_id,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                log_context={
+                    "paper_id": paper_id,
+                    "dimensions_checked": report.get("dimensions_checked", 0),
+                    "weak": report.get("weak", 0),
+                    "missing": report.get("missing", 0),
+                },
             )
-            await queue.put(("done", (report, stats)))
+            await queue.put(("done", report))
         except asyncio.TimeoutError:
             log_operation(
                 "review_paper", "error", req_id=req_id, user_id=user_id,
@@ -1235,7 +1405,7 @@ async def review_paper_stream(
             )
             await queue.put(("error", {"message": f"Review failed: {exc}"}))
 
-    asyncio.create_task(run_review())
+    track_task(run_review())
 
     async def event_stream():
         yield _sse_format("open", {"req_id": req_id})
@@ -1252,40 +1422,10 @@ async def review_paper_stream(
                 return
 
             if kind == "done":
-                report, stats = payload
-                # Only record usage + cache when the review actually produced a
-                # report (a hard failure shouldn't be cached or billed).
-                if not report.get("review_failed"):
-                    try:
-                        upload_review_report(paper_id, report)
-                    except Exception as exc:
-                        log_operation(
-                            "upload_review_report", "error", req_id=req_id,
-                            user_id=user_id, error=exc, context={"paper_id": paper_id},
-                        )
-                    record_usage(
-                        user_id=user_id,
-                        kind="audit",
-                        req_id=req_id,
-                        paper_id=paper_id,
-                        llm_calls=stats["call_count"],
-                        tokens_in=stats["tokens_in"],
-                        tokens_out=stats["tokens_out"],
-                        cost_usd=stats["cost_usd"],
-                    )
-                log_operation(
-                    "review_paper", "success", req_id=req_id, user_id=user_id,
-                    context={
-                        "paper_id": paper_id,
-                        "dimensions_checked": report.get("dimensions_checked", 0),
-                        "weak": report.get("weak", 0),
-                        "missing": report.get("missing", 0),
-                    },
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                )
-                report["request_id"] = req_id
-                report["cached"] = False
-                yield _sse_format("done", report)
+                # Caching + usage accounting already happened in the
+                # worker (see _finalize_stream_work) so an aborted
+                # stream cannot skip them. Nothing to do but emit.
+                yield _sse_format("done", payload)
                 return
 
     return StreamingResponse(
@@ -1306,6 +1446,7 @@ async def review_paper_stream(
 # ?force=1 is passed. Shares the audit quota pool (kind="audit").
 
 @app.post("/papers/{paper_id}/novelty/stream")
+@limiter.limit("5/minute")
 async def novelty_scan_stream(
     paper_id: str,
     request: Request,
@@ -1354,11 +1495,24 @@ async def novelty_scan_stream(
                     report = find_related_work(paper_id, on_progress=on_progress)
                     return report, get_stats()
 
-            report, stats = await asyncio.wait_for(
-                loop.run_in_executor(None, fn),
-                timeout=180.0,
+            report, stats = await run_on_executor(fn, 180.0)
+            _finalize_stream_work(
+                report=report,
+                stats=stats,
+                persist=upload_novelty_report,
+                persist_op="upload_novelty_report",
+                failed_key="scan_failed",
+                op="novelty_scan",
+                user_id=user_id,
+                req_id=req_id,
+                paper_id=paper_id,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                log_context={
+                    "paper_id": paper_id,
+                    "candidates_found": report.get("candidates_found", 0),
+                },
             )
-            await queue.put(("done", (report, stats)))
+            await queue.put(("done", report))
         except asyncio.TimeoutError:
             log_operation(
                 "novelty_scan", "error", req_id=req_id, user_id=user_id,
@@ -1376,7 +1530,7 @@ async def novelty_scan_stream(
             )
             await queue.put(("error", {"message": f"Novelty scan failed: {exc}"}))
 
-    asyncio.create_task(run_scan())
+    track_task(run_scan())
 
     async def event_stream():
         yield _sse_format("open", {"req_id": req_id})
@@ -1393,38 +1547,10 @@ async def novelty_scan_stream(
                 return
 
             if kind == "done":
-                report, stats = payload
-                # Only record usage + cache when the scan actually produced a
-                # report (a hard failure shouldn't be cached or billed).
-                if not report.get("scan_failed"):
-                    try:
-                        upload_novelty_report(paper_id, report)
-                    except Exception as exc:
-                        log_operation(
-                            "upload_novelty_report", "error", req_id=req_id,
-                            user_id=user_id, error=exc, context={"paper_id": paper_id},
-                        )
-                    record_usage(
-                        user_id=user_id,
-                        kind="audit",
-                        req_id=req_id,
-                        paper_id=paper_id,
-                        llm_calls=stats["call_count"],
-                        tokens_in=stats["tokens_in"],
-                        tokens_out=stats["tokens_out"],
-                        cost_usd=stats["cost_usd"],
-                    )
-                log_operation(
-                    "novelty_scan", "success", req_id=req_id, user_id=user_id,
-                    context={
-                        "paper_id": paper_id,
-                        "candidates_found": report.get("candidates_found", 0),
-                    },
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                )
-                report["request_id"] = req_id
-                report["cached"] = False
-                yield _sse_format("done", report)
+                # Caching + usage accounting already happened in the
+                # worker (see _finalize_stream_work) so an aborted
+                # stream cannot skip them. Nothing to do but emit.
+                yield _sse_format("done", payload)
                 return
 
     return StreamingResponse(
@@ -1451,6 +1577,7 @@ def get_venues():
 
 
 @app.post("/papers/{paper_id}/structure/stream")
+@limiter.limit("5/minute")
 async def structure_check_stream(
     paper_id: str,
     request: Request,
@@ -1501,11 +1628,26 @@ async def structure_check_stream(
                     report = check_structure(paper_id, venue, on_progress=on_progress)
                     return report, get_stats()
 
-            report, stats = await asyncio.wait_for(
-                loop.run_in_executor(None, fn),
-                timeout=180.0,
+            report, stats = await run_on_executor(fn, 180.0)
+            _finalize_stream_work(
+                report=report,
+                stats=stats,
+                persist=upload_structure_report,
+                persist_op="upload_structure_report",
+                failed_key="structure_failed",
+                op="structure_check",
+                user_id=user_id,
+                req_id=req_id,
+                paper_id=paper_id,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                log_context={
+                    "paper_id": paper_id,
+                    "venue": venue,
+                    "required_missing": report.get("required_missing", 0),
+                    "missing": report.get("missing", 0),
+                },
             )
-            await queue.put(("done", (report, stats)))
+            await queue.put(("done", report))
         except asyncio.TimeoutError:
             log_operation(
                 "structure_check", "error", req_id=req_id, user_id=user_id,
@@ -1523,7 +1665,7 @@ async def structure_check_stream(
             )
             await queue.put(("error", {"message": f"Structure check failed: {exc}"}))
 
-    asyncio.create_task(run_check())
+    track_task(run_check())
 
     async def event_stream():
         yield _sse_format("open", {"req_id": req_id})
@@ -1540,40 +1682,10 @@ async def structure_check_stream(
                 return
 
             if kind == "done":
-                report, stats = payload
-                # Only record usage + cache when the check actually produced a
-                # report (a hard failure shouldn't be cached or billed).
-                if not report.get("structure_failed"):
-                    try:
-                        upload_structure_report(paper_id, report)
-                    except Exception as exc:
-                        log_operation(
-                            "upload_structure_report", "error", req_id=req_id,
-                            user_id=user_id, error=exc, context={"paper_id": paper_id},
-                        )
-                    record_usage(
-                        user_id=user_id,
-                        kind="audit",
-                        req_id=req_id,
-                        paper_id=paper_id,
-                        llm_calls=stats["call_count"],
-                        tokens_in=stats["tokens_in"],
-                        tokens_out=stats["tokens_out"],
-                        cost_usd=stats["cost_usd"],
-                    )
-                log_operation(
-                    "structure_check", "success", req_id=req_id, user_id=user_id,
-                    context={
-                        "paper_id": paper_id,
-                        "venue": venue,
-                        "required_missing": report.get("required_missing", 0),
-                        "missing": report.get("missing", 0),
-                    },
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                )
-                report["request_id"] = req_id
-                report["cached"] = False
-                yield _sse_format("done", report)
+                # Caching + usage accounting already happened in the
+                # worker (see _finalize_stream_work) so an aborted
+                # stream cannot skip them. Nothing to do but emit.
+                yield _sse_format("done", payload)
                 return
 
     return StreamingResponse(
@@ -1593,6 +1705,7 @@ async def structure_check_stream(
 # progress pusher + SSE, R2-cached, re-served without LLM cost unless ?force=1.
 
 @app.post("/papers/{paper_id}/numbers/stream")
+@limiter.limit("5/minute")
 async def numbers_check_stream(
     paper_id: str,
     request: Request,
@@ -1641,11 +1754,25 @@ async def numbers_check_stream(
                     report = audit_numbers(paper_id, on_progress=on_progress)
                     return report, get_stats()
 
-            report, stats = await asyncio.wait_for(
-                loop.run_in_executor(None, fn),
-                timeout=180.0,
+            report, stats = await run_on_executor(fn, 180.0)
+            _finalize_stream_work(
+                report=report,
+                stats=stats,
+                persist=upload_numbers_report,
+                persist_op="upload_numbers_report",
+                failed_key="audit_failed",
+                op="numbers_check",
+                user_id=user_id,
+                req_id=req_id,
+                paper_id=paper_id,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                log_context={
+                    "paper_id": paper_id,
+                    "numbers_checked": report.get("numbers_checked", 0),
+                    "mismatched": report.get("mismatched", 0),
+                },
             )
-            await queue.put(("done", (report, stats)))
+            await queue.put(("done", report))
         except asyncio.TimeoutError:
             log_operation(
                 "numbers_check", "error", req_id=req_id, user_id=user_id,
@@ -1663,7 +1790,7 @@ async def numbers_check_stream(
             )
             await queue.put(("error", {"message": f"Numbers check failed: {exc}"}))
 
-    asyncio.create_task(run_numbers())
+    track_task(run_numbers())
 
     async def event_stream():
         yield _sse_format("open", {"req_id": req_id})
@@ -1680,39 +1807,10 @@ async def numbers_check_stream(
                 return
 
             if kind == "done":
-                report, stats = payload
-                # Only record usage + cache when the check actually produced a
-                # report (a hard failure shouldn't be cached or billed).
-                if not report.get("audit_failed"):
-                    try:
-                        upload_numbers_report(paper_id, report)
-                    except Exception as exc:
-                        log_operation(
-                            "upload_numbers_report", "error", req_id=req_id,
-                            user_id=user_id, error=exc, context={"paper_id": paper_id},
-                        )
-                    record_usage(
-                        user_id=user_id,
-                        kind="audit",
-                        req_id=req_id,
-                        paper_id=paper_id,
-                        llm_calls=stats["call_count"],
-                        tokens_in=stats["tokens_in"],
-                        tokens_out=stats["tokens_out"],
-                        cost_usd=stats["cost_usd"],
-                    )
-                log_operation(
-                    "numbers_check", "success", req_id=req_id, user_id=user_id,
-                    context={
-                        "paper_id": paper_id,
-                        "numbers_checked": report.get("numbers_checked", 0),
-                        "mismatched": report.get("mismatched", 0),
-                    },
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                )
-                report["request_id"] = req_id
-                report["cached"] = False
-                yield _sse_format("done", report)
+                # Caching + usage accounting already happened in the
+                # worker (see _finalize_stream_work) so an aborted
+                # stream cannot skip them. Nothing to do but emit.
+                yield _sse_format("done", payload)
                 return
 
     return StreamingResponse(
@@ -1735,6 +1833,7 @@ async def numbers_check_stream(
 # Shares the audit quota pool (kind="audit").
 
 @app.post("/papers/{paper_id}/citation-gaps/stream")
+@limiter.limit("5/minute")
 async def citation_gap_stream(
     paper_id: str,
     request: Request,
@@ -1783,11 +1882,24 @@ async def citation_gap_stream(
                     report = audit_citation_gaps(paper_id, on_progress=on_progress)
                     return report, get_stats()
 
-            report, stats = await asyncio.wait_for(
-                loop.run_in_executor(None, fn),
-                timeout=180.0,
+            report, stats = await run_on_executor(fn, 180.0)
+            _finalize_stream_work(
+                report=report,
+                stats=stats,
+                persist=upload_citation_gap_report,
+                persist_op="upload_citation_gap_report",
+                failed_key="audit_failed",
+                op="citation_gap_check",
+                user_id=user_id,
+                req_id=req_id,
+                paper_id=paper_id,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                log_context={
+                    "paper_id": paper_id,
+                    "gaps_found": report.get("gaps_found", 0),
+                },
             )
-            await queue.put(("done", (report, stats)))
+            await queue.put(("done", report))
         except asyncio.TimeoutError:
             log_operation(
                 "citation_gap_check", "error", req_id=req_id, user_id=user_id,
@@ -1805,7 +1917,7 @@ async def citation_gap_stream(
             )
             await queue.put(("error", {"message": f"Citation gap check failed: {exc}"}))
 
-    asyncio.create_task(run_check())
+    track_task(run_check())
 
     async def event_stream():
         yield _sse_format("open", {"req_id": req_id})
@@ -1822,38 +1934,10 @@ async def citation_gap_stream(
                 return
 
             if kind == "done":
-                report, stats = payload
-                # Only record usage + cache when the check actually produced a
-                # report (a hard failure shouldn't be cached or billed).
-                if not report.get("audit_failed"):
-                    try:
-                        upload_citation_gap_report(paper_id, report)
-                    except Exception as exc:
-                        log_operation(
-                            "upload_citation_gap_report", "error", req_id=req_id,
-                            user_id=user_id, error=exc, context={"paper_id": paper_id},
-                        )
-                    record_usage(
-                        user_id=user_id,
-                        kind="audit",
-                        req_id=req_id,
-                        paper_id=paper_id,
-                        llm_calls=stats["call_count"],
-                        tokens_in=stats["tokens_in"],
-                        tokens_out=stats["tokens_out"],
-                        cost_usd=stats["cost_usd"],
-                    )
-                log_operation(
-                    "citation_gap_check", "success", req_id=req_id, user_id=user_id,
-                    context={
-                        "paper_id": paper_id,
-                        "gaps_found": report.get("gaps_found", 0),
-                    },
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                )
-                report["request_id"] = req_id
-                report["cached"] = False
-                yield _sse_format("done", report)
+                # Caching + usage accounting already happened in the
+                # worker (see _finalize_stream_work) so an aborted
+                # stream cannot skip them. Nothing to do but emit.
+                yield _sse_format("done", payload)
                 return
 
     return StreamingResponse(
@@ -1895,6 +1979,7 @@ def _overlap_corpus(user_id: str, paper_id: str) -> list[dict]:
 
 
 @app.post("/papers/{paper_id}/overlap/stream")
+@limiter.limit("5/minute")
 async def overlap_stream(
     paper_id: str,
     request: Request,
@@ -1944,14 +2029,28 @@ async def overlap_stream(
                     report = audit_overlap(paper_id, corpus, on_progress=on_progress)
                     return report, get_stats()
 
-            report, stats = await asyncio.wait_for(
-                loop.run_in_executor(None, fn),
-                # Longer than the local-only siblings: the cost scales with the
-                # size of the library, since every corpus paper is read out of
-                # Chroma and indexed.
-                timeout=240.0,
+            # Longer timeout than the local-only siblings: the cost scales with
+            # the size of the library, since every corpus paper is read out of
+            # Chroma and indexed.
+            report, stats = await run_on_executor(fn, 240.0)
+            _finalize_stream_work(
+                report=report,
+                stats=stats,
+                persist=upload_overlap_report,
+                persist_op="upload_overlap_report",
+                failed_key="audit_failed",
+                op="overlap_check",
+                user_id=user_id,
+                req_id=req_id,
+                paper_id=paper_id,
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                log_context={
+                    "paper_id": paper_id,
+                    "corpus": len(corpus),
+                    "matches_found": report.get("matches_found", 0),
+                },
             )
-            await queue.put(("done", (report, stats)))
+            await queue.put(("done", report))
         except asyncio.TimeoutError:
             log_operation(
                 "overlap_check", "error", req_id=req_id, user_id=user_id,
@@ -1969,7 +2068,7 @@ async def overlap_stream(
             )
             await queue.put(("error", {"message": f"Overlap check failed: {exc}"}))
 
-    asyncio.create_task(run_check())
+    track_task(run_check())
 
     async def event_stream():
         yield _sse_format("open", {"req_id": req_id})
@@ -1986,39 +2085,10 @@ async def overlap_stream(
                 return
 
             if kind == "done":
-                report, stats = payload
-                # Only record usage + cache when the check actually produced a
-                # report (a hard failure shouldn't be cached or billed).
-                if not report.get("audit_failed"):
-                    try:
-                        upload_overlap_report(paper_id, report)
-                    except Exception as exc:
-                        log_operation(
-                            "upload_overlap_report", "error", req_id=req_id,
-                            user_id=user_id, error=exc, context={"paper_id": paper_id},
-                        )
-                    record_usage(
-                        user_id=user_id,
-                        kind="audit",
-                        req_id=req_id,
-                        paper_id=paper_id,
-                        llm_calls=stats["call_count"],
-                        tokens_in=stats["tokens_in"],
-                        tokens_out=stats["tokens_out"],
-                        cost_usd=stats["cost_usd"],
-                    )
-                log_operation(
-                    "overlap_check", "success", req_id=req_id, user_id=user_id,
-                    context={
-                        "paper_id": paper_id,
-                        "corpus": len(corpus),
-                        "matches_found": report.get("matches_found", 0),
-                    },
-                    duration_ms=round((time.monotonic() - t0) * 1000),
-                )
-                report["request_id"] = req_id
-                report["cached"] = False
-                yield _sse_format("done", report)
+                # Caching + usage accounting already happened in the
+                # worker (see _finalize_stream_work) so an aborted
+                # stream cannot skip them. Nothing to do but emit.
+                yield _sse_format("done", payload)
                 return
 
     return StreamingResponse(

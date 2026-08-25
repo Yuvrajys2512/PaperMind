@@ -2,6 +2,12 @@
 
 _Date: 2026-06-19 — audit of the §1–§5 "code-complete" claims in [LAUNCH_CHECKLIST.md](LAUNCH_CHECKLIST.md) plus a local Docker smoke test._
 
+> ⚠️ **Superseded in part (2026-08-25).** A fuller audit is in [LAUNCH_CHECKLIST.md](LAUNCH_CHECKLIST.md).
+> Two claims below are now **stale**: Finding #1 (Stripe vars crash at import) was **fixed** — `api/billing.py`
+> soft-disables billing instead of raising; and the praise for the webhook "ACKing every verified event" is
+> **wrong** — it also ACKs events whose handler crashed, which can silently lose a payment (checklist item 2.1).
+> Findings #2, #3 and #4 are still open and carried forward as checklist items 1.5, 2.3, 1.6 / 4.x.
+
 **Bottom line:** the engineering is done and the deploy artifact provably works (built and ran it locally). Nothing on the critical path needs more feature code. What's left is manual ops gated by external approvals (Stripe live-mode verification, key rotation, HF + Vercel deploy, legal review) — **days to "live and taking payments," not weeks.**
 
 ---

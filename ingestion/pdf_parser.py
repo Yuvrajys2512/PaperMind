@@ -5,14 +5,34 @@ Handles both single-column AND two-column layouts by detecting
 column structure per-page using character x-coordinate gap analysis.
 
 Public API:
+    count_pdf_pages(pdf_path)        → int
     extract_text_from_pdf(pdf_path)  → dict with pages, full_text, total_pages
     remove_credits_block(text)       → str
     remove_references_section(text)  → str
 """
 
+import os
 import pdfplumber
 import re
 from statistics import median
+
+# A 1,200-page PDF gets fully pdfplumber-parsed, LLM-heading-confirmed,
+# chunked, and embedded — holding a thread and the paper lock for a very
+# long time and burning a large chunk of the shared free LLM quota. 80 pages
+# comfortably covers a research paper plus appendix.
+MAX_PDF_PAGES = int(os.getenv("PAPERMIND_MAX_PDF_PAGES", "80"))
+
+
+class PDFTooLongError(ValueError):
+    """Raised when a PDF exceeds MAX_PDF_PAGES."""
+
+
+def count_pdf_pages(pdf_path: str) -> int:
+    """Cheap page count — opens the PDF but does none of the per-page prose/
+    table extraction extract_text_from_pdf does. Used to reject an
+    over-length upload before any storage or ingestion work starts."""
+    with pdfplumber.open(pdf_path) as pdf:
+        return len(pdf.pages)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -540,6 +560,10 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
 
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
+        if total_pages > MAX_PDF_PAGES:
+            raise PDFTooLongError(
+                f"PDF has {total_pages} pages, exceeding the {MAX_PDF_PAGES}-page limit."
+            )
 
         for page_num, page in enumerate(pdf.pages, start=1):
             # Keep only upright characters — filters rotated watermarks

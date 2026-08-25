@@ -1,13 +1,9 @@
 # ingestion/embedder.py
 
-import chromadb
 import hashlib
 
+from api.concurrency import get_chroma_client
 from ingestion.models import embed_passages
-
-# ChromaDB client — PersistentClient means data is saved to disk
-# so you don't have to re-embed every time you restart the program
-client = chromadb.PersistentClient(path="data/chroma_db")
 
 
 def get_or_create_collection(paper_name: str):
@@ -27,7 +23,7 @@ def get_or_create_collection(paper_name: str):
         for c in paper_name
     ).strip("-").lower()
     
-    return client.get_or_create_collection(
+    return get_chroma_client().get_or_create_collection(
         name=clean_name,
         metadata={"paper": paper_name}
     )
